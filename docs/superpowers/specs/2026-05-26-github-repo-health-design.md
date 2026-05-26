@@ -11,7 +11,7 @@
 - 快速判断一个公开仓库或已授权私有仓库是否活跃、规范、值得关注或依赖。
 - 用图表看清 Star、Fork、Issue、语言分布、维护活跃度等基础指标。
 - 获得明确的健康状态和可执行建议，而不是只看原始数字。
-- 在需要时单独启动 AI agent 分析，让 agent 结合搜索结果、仓库页面和基础检测信息给出更深入的评分和建议。
+- 在需要时单独启动 AI agent 分析，让 agent 结合 Github API 数据、公开网页搜索结果和基础检测信息给出更深入的评分和建议。
 
 ## 3. 核心流程
 
@@ -25,7 +25,7 @@
 8. 系统生成确定性的系统评分、健康状态、图表数据和风险提示。
 9. 前端优先展示系统评分和状态。
 10. 用户可点击“AI 深度分析”单独启动 agent 分析。
-11. AI agent 接收仓库链接、系统提示词和已探测到的基础信息，自行调用 Tavily 搜索/网页提取能力补充上下文，最后返回 AI 评分、分析结论和建议。
+11. AI agent 接收仓库链接、系统提示词和已探测到的基础信息；公开仓库可调用 Tavily 搜索/网页提取和受控 Github API 包装工具补充上下文，私有仓库默认只调用受控 Github API 包装工具；最后返回 AI 评分、分析结论和建议。
 
 ## 4. 功能范围
 
@@ -80,11 +80,27 @@ AI agent 分析是扩展功能，不阻塞基础体检结果。默认检测流�
 agent 需要具备：
 
 - 输入：仓库 URL、基础检测 JSON、系统评分、风险提示、分析提示词。
-- 工具：Tavily API 包装的网页搜索和网页提取能力，或直接对接 Tavily MCP。
+- 公开仓库工具：Tavily API 包装的网页搜索/网页提取能力，或直接对接 Tavily MCP。
+- Github API 包装工具：为 agent 提供受控的只读 Github API 工具，而不是让 agent 直接任意请求 API。
 - 模型配置：从 `.env` 读取模型 `base_url`、`api_key` 和 `model`。
 - 行为：围绕该仓库主动查找 Github 页面、README、Release、Issue/PR 讨论、文档站、社区讨论等公开信息。
 - 输出：AI 评分、评分理由、关键发现、风险解释、改进建议、引用链接。
-- 私有仓库保护：私有仓库的 agent 分析默认不把仓库私有内容发送给 Tavily；Tavily 只用于搜索公开网页。是否把私有仓库基础检测信息发送给模型，需要在页面上明确提示并由用户单独确认。
+- 私有仓库保护：私有仓库的 agent 分析默认不启用 Tavily，不把仓库私有内容发送给公开网页搜索/提取工具。是否把私有仓库基础检测信息和 Github API 摘要发送给模型，需要在页面上明确提示并由用户单独确认。
+
+建议提供给 agent 的 Github API 包装工具：
+
+| 工具 | 数据来源 | 用途 | 约束 |
+| --- | --- | --- | --- |
+| `get_repo_summary` | Repository API | 仓库基础信息、热度、License、默认分支、archived/fork 状态 | 返回结构化摘要 |
+| `get_language_breakdown` | Languages API | 语言分布 | 只返回语言和占比 |
+| `get_community_profile` | Community Metrics API | README、LICENSE、贡献规范、安全策略等社区健康状态 | 不可用时返回 unknown |
+| `get_recent_commits` | Commits API | 近 30/90 天维护节奏、提交信息摘要 | 限制页数和字段，不返回完整 diff |
+| `get_releases` | Releases API | Release 节奏和最近版本说明 | 限制最近 N 条 |
+| `get_issues_summary` | Issues API | Issue 积压、最近讨论、维护响应 | 限制最近 N 条，摘要化评论 |
+| `get_pulls_summary` | Pull Requests API | PR 积压、review/merge 活跃度 | 限制最近 N 条，摘要化评论 |
+| `get_readme_and_key_files` | Contents API | README、CONTRIBUTING、SECURITY、模板等关键文件内容 | 文件大小和路径白名单限制 |
+
+公开仓库 agent 可同时使用 Tavily 和上述 Github API 包装工具。Tavily 用于补充 Github 外部信息，如官方文档站、迁移公告、博客、社区讨论和包管理器页面；Github API 包装工具用于获取仓库内部事实。私有仓库 agent 默认只使用 Github API 包装工具。
 
 第一版可以先预留接口和页面入口；agent 实现可作为第二阶段开发。
 
@@ -173,7 +189,7 @@ agent 需要具备：
 
 ### 6.2 AI 评分
 
-AI 评分总分 100，但不替代系统评分。AI 评分关注系统数据之外的上下文，例如项目定位、README 质量、Issue 讨论质量、Release 说明、外部文档、社区反馈、是否有迁移公告、是否存在维护者说明等。
+AI 评分总分 100，但不替代系统评分。AI 评分关注系统数据之外的上下文，例如项目定位、README 质量、Issue 讨论质量、Release 说明、外部文档、社区反馈、是否有迁移公告、是否存在维护者说明等。公开仓库 AI 分析可以同时使用 Tavily 和 Github API 包装工具；私有仓库 AI 分析默认只使用 Github API 包装工具。
 
 AI agent 输入示例：
 
@@ -206,7 +222,9 @@ AI agent 提示词要点：
 
 - 你是 Github 仓库健康分析 agent。
 - 先阅读系统提供的基础检测结果。
-- 使用 Tavily 搜索和网页提取工具查找该仓库的 Github 页面、README、Release、Issue、PR、官方文档和外部讨论。
+- 使用 Github API 包装工具读取仓库摘要、语言分布、社区健康、README、Release、Issue、PR 和近期提交。
+- 如果仓库是公开仓库并且 Tavily 可用，使用 Tavily 搜索和网页提取工具查找官方文档、迁移公告、博客、包管理器页面和外部讨论。
+- 如果仓库是私有仓库，不使用 Tavily，不把私有仓库内容发送给公开网页搜索或提取工具。
 - 判断系统评分是否遗漏了重要背景。
 - 给出 AI 评分、评分理由、主要风险、改进建议。
 - 每条关键判断必须附带来源链接。
@@ -304,7 +322,8 @@ AI 输出结构：
 - `github_app_service`：处理 GitHub App 安装回调、App JWT、installation access token 和权限错误。
 - `github_client`：封装 Github REST API 请求；公开仓库走匿名请求，私有仓库走 installation token。
 - `health_analyzer`：把 Github API 数据转换为系统评分、状态和风险提示。
-- `agent_service`：扩展功能，封装 LLM、Tavily 搜索和网页提取。
+- `agent_service`：扩展功能，编排 LLM、Tavily 搜索/网页提取和 Github API 包装工具。
+- `agent_tools`：向 agent 暴露受控只读工具，限制请求范围、返回字段、页数和私有仓库数据外发策略。
 - `config`：从 `.env` 读取 Flask、GitHub App、Tavily 和模型配置。
 
 ### 9.2 前端
@@ -355,7 +374,7 @@ MODEL_API_KEY=replace-with-model-api-key
 MODEL_NAME=gpt-4.1-mini
 ```
 
-未配置 GitHub App 时，公开仓库匿名分析仍可使用；私有仓库分析入口提示需要配置 GitHub App。未配置 `TAVILY_API_KEY`、`MODEL_BASE_URL`、`MODEL_API_KEY` 或 `MODEL_NAME` 时，隐藏或禁用 AI agent 分析入口，但系统评分仍可正常使用。
+未配置 GitHub App 时，公开仓库匿名分析仍可使用；私有仓库分析入口提示需要配置 GitHub App。未配置 `MODEL_BASE_URL`、`MODEL_API_KEY` 或 `MODEL_NAME` 时，隐藏或禁用 AI agent 分析入口，但系统评分仍可正常使用。未配置 `TAVILY_API_KEY` 时，公开仓库 agent 仍可使用 Github API 包装工具分析，但不执行外部网页搜索和提取。
 
 ## 10. 错误处理
 
@@ -395,5 +414,6 @@ MODEL_NAME=gpt-4.1-mini
 - 公开仓库无需登录即可完成系统体检。
 - 页面支持 GitHub App 安装入口、installation 状态展示和本地授权状态清理。
 - 授权范围内的私有仓库可以通过 GitHub App installation token 体检。
-- AI agent 分析入口与系统检测解耦；未配置 Tavily 时系统检测仍可正常使用。
-- 配置 Tavily 和模型参数后，可以单独启动 agent 分析，并得到 AI 评分、引用链接和建议。
+- AI agent 分析入口与系统检测解耦；未配置模型或 Tavily 时系统检测仍可正常使用。
+- 配置模型参数后，可以单独启动基于 Github API 包装工具的 agent 分析，并得到 AI 评分、引用链接和建议。
+- 配置 Tavily 后，公开仓库 agent 分析可以额外使用网页搜索和网页提取补充外部证据。
