@@ -185,6 +185,7 @@ function renderGithubAppSession(session) {
     createMetaItem("账户", account),
     createMetaItem("仓库范围", session.repository_selection || "--"),
     createMetaItem("仓库数量", repositories.length ? String(repositories.length) : "--"),
+    createMetaItem("AI Agent", session.agent_configured ? "可用" : "未配置"),
     createMetaItem("权限", summarizePermissions(session.permissions))
   );
 
@@ -196,6 +197,7 @@ function renderGithubAppSession(session) {
     els["github-app-install"].removeAttribute("href");
     els["github-app-install"].setAttribute("aria-disabled", "true");
   }
+  renderAgentControls(Boolean(state.lastAnalysis));
 }
 
 async function analyzeRepository(event) {
@@ -549,11 +551,16 @@ function beginAnalysisRefresh() {
 
 function renderAgentControls(hasAnalysis) {
   const privateMode = Boolean(state.lastAnalysis && state.lastAnalysis.private_mode);
-  els["agent-note"].textContent = hasAnalysis
-    ? privateMode
-      ? "私有仓库 AI 分析需要单独确认后再发送体检摘要和受控 GitHub API 摘要。"
-      : "公开仓库 AI 分析会结合系统评分、GitHub API 摘要和可用公开网页证据。"
-    : "系统体检完成后，可单独启动 AI 深度分析。";
+  const modelReady = isAgentConfigured();
+  if (hasAnalysis && !modelReady) {
+    els["agent-note"].textContent = "模型参数未配置，AI 深度分析暂不可用。";
+  } else {
+    els["agent-note"].textContent = hasAnalysis
+      ? privateMode
+        ? "私有仓库 AI 分析需要单独确认后再发送体检摘要和受控 GitHub API 摘要。"
+        : "公开仓库 AI 分析会结合系统评分、GitHub API 摘要和可用公开网页证据。"
+      : "系统体检完成后，可单独启动 AI 深度分析。";
+  }
   els["agent-private-confirm-row"].classList.toggle("hidden", !privateMode || !hasAnalysis);
   els["agent-private-confirm"].checked = false;
   els["agent-status"].textContent = "";
@@ -567,12 +574,22 @@ function renderAgentAvailability() {
   const hasAnalysis = Boolean(state.lastAnalysis);
   const privateMode = Boolean(state.lastAnalysis && state.lastAnalysis.private_mode);
   const confirmed = Boolean(els["agent-private-confirm"].checked);
-  els["agent-button"].disabled = !hasAnalysis || (privateMode && !confirmed);
+  els["agent-button"].disabled = !hasAnalysis || !isAgentConfigured() || (privateMode && !confirmed);
 }
 
 async function runAgentAnalysis() {
   if (!state.lastAnalysis) {
     setAgentStatus("请先完成系统体检。", "error");
+    return;
+  }
+  if (!isAgentConfigured()) {
+    setAgentStatus("模型参数未配置，无法启动 AI 深度分析。", "error");
+    renderAgentAvailability();
+    return;
+  }
+  if (!state.lastAnalysis.analysis_id) {
+    setAgentStatus("当前体检缺少 analysis_id，请重新体检。", "error");
+    renderAgentAvailability();
     return;
   }
 
@@ -628,18 +645,13 @@ async function runAgentAnalysis() {
 
 function buildAgentPayload(privateMode) {
   return {
-    url: state.lastAnalysisUrl || "",
-    private_mode: privateMode,
+    analysis_id: state.lastAnalysis.analysis_id,
     confirm_private_data_to_model: privateMode ? els["agent-private-confirm"].checked : undefined,
-    system_score: state.lastAnalysis.score || {},
-    detected_info: {
-      repository: state.lastAnalysis.repository || {},
-      languages: state.lastAnalysis.languages || {},
-      community: state.lastAnalysis.community || {},
-      activity: state.lastAnalysis.activity || {},
-      partial_errors: state.lastAnalysis.partial_errors || [],
-    },
   };
+}
+
+function isAgentConfigured() {
+  return Boolean(state.githubApp && state.githubApp.agent_configured);
 }
 
 function renderAgentResult(result) {

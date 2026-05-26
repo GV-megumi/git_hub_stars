@@ -59,14 +59,23 @@ def test_public_agent_route_uses_anonymous_github_client_and_service(monkeypatch
         )
     )
     client = app.test_client()
+    analysis_id = seed_completed_analysis(
+        app,
+        client,
+        repo_url="https://github.com/owner/repo",
+        private_mode=False,
+        system_score={"score": 80, "status": "良好"},
+        detected_info={"languages": {"Python": 90.0}},
+    )
 
     response = client.post(
         "/api/agent/analyze",
         json={
-            "url": "https://github.com/owner/repo",
-            "system_score": {"score": 80, "status": "良好"},
-            "detected_info": {"languages": {"Python": 90.0}},
-            "private_mode": False,
+            "analysis_id": analysis_id,
+            "url": "https://github.com/evil/repo",
+            "system_score": {"score": 1},
+            "detected_info": {"languages": {"Shell": 100.0}},
+            "private_mode": True,
         },
     )
 
@@ -85,6 +94,103 @@ def test_public_agent_route_uses_anonymous_github_client_and_service(monkeypatch
     assert service_calls[0]["settings"] is app.config["APP_SETTINGS"]
     assert service_calls[0]["settings"].tavily_api_key == "tavily-key"
     assert service_calls[0]["permissions"] == {}
+
+
+def test_agent_route_requires_completed_system_analysis_before_service(monkeypatch):
+    from app import routes
+
+    created_clients = []
+    service_calls = []
+
+    class FakeGithubClient:
+        def __init__(self, base_url, token=None):
+            created_clients.append({"base_url": base_url, "token": token})
+
+    monkeypatch.setattr(routes, "GithubClient", FakeGithubClient)
+    monkeypatch.setattr(routes, "run_agent_analysis", lambda **kwargs: service_calls.append(kwargs))
+    app = create_app(make_settings(model_configured=True, tavily_api_key="tavily-key"))
+    client = app.test_client()
+
+    response = client.post(
+        "/api/agent/analyze",
+        json={
+            "url": "https://github.com/owner/repo",
+            "private_mode": False,
+            "system_score": {"score": 80},
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json["error"] == "permission_required"
+    assert created_clients == []
+    assert service_calls == []
+
+
+def test_agent_route_accepts_session_owned_analysis_when_last_id_cookie_is_stale(monkeypatch):
+    from app import routes
+
+    service_calls = []
+
+    class FakeGithubClient:
+        def __init__(self, base_url, token=None):
+            pass
+
+    def fake_run_agent_analysis(**kwargs):
+        service_calls.append(kwargs)
+        return {"ai_score": 88, "tavily_enabled": True}
+
+    monkeypatch.setattr(routes, "GithubClient", FakeGithubClient)
+    monkeypatch.setattr(routes, "run_agent_analysis", fake_run_agent_analysis)
+    app = create_app(make_settings(model_configured=True, tavily_api_key="tavily-key"))
+    client = app.test_client()
+    accepted_id = seed_completed_analysis(
+        app,
+        client,
+        repo_url="https://github.com/owner/current",
+        private_mode=False,
+        system_score={"score": 82},
+        detected_info={"repository": {"full_name": "owner/current"}},
+        analysis_id="accepted-analysis",
+    )
+    with client.session_transaction() as session:
+        session["last_analysis_id"] = "stale-analysis"
+
+    response = client.post("/api/agent/analyze", json={"analysis_id": accepted_id})
+
+    assert response.status_code == 200
+    assert service_calls[0]["repo_url"] == "https://github.com/owner/current"
+    assert service_calls[0]["system_score"] == {"score": 82}
+
+
+def test_agent_route_rejects_analysis_id_from_other_session_owner(monkeypatch):
+    from app import routes
+
+    service_calls = []
+
+    class FakeGithubClient:
+        def __init__(self, base_url, token=None):
+            pass
+
+    monkeypatch.setattr(routes, "GithubClient", FakeGithubClient)
+    monkeypatch.setattr(routes, "run_agent_analysis", lambda **kwargs: service_calls.append(kwargs))
+    app = create_app(make_settings(model_configured=True, tavily_api_key="tavily-key"))
+    client = app.test_client()
+    app.extensions.setdefault("repo_health_analysis_cache", {})["foreign-analysis"] = {
+        "owner_id": "other-owner",
+        "url": "https://github.com/owner/repo",
+        "private_mode": False,
+        "system_score": {"score": 80},
+        "detected_info": {},
+    }
+    with client.session_transaction() as session:
+        session["analysis_owner_id"] = "current-owner"
+        session["last_analysis_id"] = "foreign-analysis"
+
+    response = client.post("/api/agent/analyze", json={"analysis_id": "foreign-analysis"})
+
+    assert response.status_code == 403
+    assert response.json["error"] == "permission_required"
+    assert service_calls == []
 
 
 @pytest.mark.parametrize(
@@ -122,12 +228,19 @@ def test_private_agent_route_requires_explicit_model_data_confirmation_before_to
     monkeypatch.setattr(routes, "run_agent_analysis", fake_run_agent_analysis)
     app = create_app(make_settings(model_configured=True, github_configured=True, tavily_api_key="tavily-key"))
     client = app.test_client()
+    analysis_id = seed_completed_analysis(
+        app,
+        client,
+        repo_url="https://github.com/owner/private-repo",
+        private_mode=True,
+        system_score={"score": 60},
+        detected_info={"private": True},
+    )
 
     payload = {
+        "analysis_id": analysis_id,
         "url": "https://github.com/owner/private-repo",
-        "system_score": {"score": 60},
-        "detected_info": {"private": True},
-        "private_mode": True,
+        "private_mode": False,
     }
     payload.update(extra_payload)
     response = client.post("/api/agent/analyze", json=payload)
@@ -195,6 +308,14 @@ def test_private_agent_route_uses_installation_token_and_keeps_tavily_disabled(m
     monkeypatch.setattr(routes, "run_agent_analysis", fake_run_agent_analysis)
     app = create_app(make_settings(model_configured=True, github_configured=True, tavily_api_key="tavily-key"))
     client = app.test_client()
+    analysis_id = seed_completed_analysis(
+        app,
+        client,
+        repo_url="https://github.com/owner/private-repo",
+        private_mode=True,
+        system_score={"score": 60},
+        detected_info={"private": True},
+    )
     with client.session_transaction() as session:
         session["github_installation_id"] = "789"
         session["github_installation_permissions"] = {
@@ -213,10 +334,11 @@ def test_private_agent_route_uses_installation_token_and_keeps_tavily_disabled(m
     response = client.post(
         "/api/agent/analyze",
         json={
-            "url": "https://github.com/owner/private-repo",
-            "system_score": {"score": 60},
-            "detected_info": {"private": True},
-            "private_mode": True,
+            "analysis_id": analysis_id,
+            "url": "https://github.com/evil/repo",
+            "system_score": {"score": 1},
+            "detected_info": {"private": False},
+            "private_mode": False,
             "confirm_private_data_to_model": True,
         },
     )
@@ -225,6 +347,11 @@ def test_private_agent_route_uses_installation_token_and_keeps_tavily_disabled(m
     payload = response.get_json()
     assert payload["tavily_enabled"] is False
     assert len(auth_instances) == 1
+    assert service_calls[0]["repo_url"] == "https://github.com/owner/private-repo"
+    assert service_calls[0]["ref"].full_name == "owner/private-repo"
+    assert service_calls[0]["system_score"] == {"score": 60}
+    assert service_calls[0]["detected_info"] == {"private": True}
+    assert service_calls[0]["private_mode"] is True
     assert auth_instances[0].create_installation_token_calls == [
         {
             "installation_id": "789",
@@ -260,6 +387,30 @@ def test_private_agent_route_uses_installation_token_and_keeps_tavily_disabled(m
     assert "installation-token" not in json.dumps(payload)
     with client.session_transaction() as session:
         assert "github_installation_token" not in session
+
+
+def seed_completed_analysis(
+    app,
+    client,
+    *,
+    repo_url: str,
+    private_mode: bool,
+    system_score: dict,
+    detected_info: dict,
+    analysis_id: str = "analysis-1",
+) -> str:
+    with client.session_transaction() as session:
+        owner_id = session.setdefault("analysis_owner_id", "owner-token")
+    app.extensions.setdefault("repo_health_analysis_cache", {})[analysis_id] = {
+        "owner_id": owner_id,
+        "url": repo_url,
+        "private_mode": private_mode,
+        "system_score": system_score,
+        "detected_info": detected_info,
+    }
+    with client.session_transaction() as session:
+        session["last_analysis_id"] = analysis_id
+    return analysis_id
 
 
 def make_settings(

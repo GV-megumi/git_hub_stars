@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from uuid import uuid4
 
 from flask import Blueprint, current_app, jsonify, redirect, render_template, request, session
 
@@ -14,6 +15,9 @@ from app.github.url_parser import parse_github_repo_url
 
 bp = Blueprint("main", __name__)
 
+_ANALYSIS_SESSION_KEY = "last_analysis_id"
+_ANALYSIS_OWNER_SESSION_KEY = "analysis_owner_id"
+_ANALYSIS_CACHE_EXTENSION = "repo_health_analysis_cache"
 _PRIVATE_ANALYSIS_PERMISSIONS = {
     "contents": "read",
     "metadata": "read",
@@ -45,6 +49,7 @@ _GITHUB_APP_SESSION_KEYS = (
 
 @bp.get("/")
 def index():
+    _analysis_owner_id()
     return render_template("index.html")
 
 
@@ -63,18 +68,21 @@ def analyze_repository():
     client = GithubClient(base_url=settings.github_api_base_url, token=token)
     snapshot = collect_repository_snapshot(client, ref)
     score = score_repository(snapshot)
+    analysis_id = uuid4().hex
 
-    return jsonify(
-        {
-            "repository": asdict(snapshot.repo),
-            "languages": snapshot.languages,
-            "community": asdict(snapshot.community),
-            "activity": asdict(snapshot.activity),
-            "score": asdict(score),
-            "partial_errors": snapshot.partial_errors,
-            "private_mode": private_mode,
-        }
-    )
+    response_payload = {
+        "analysis_id": analysis_id,
+        "repository": asdict(snapshot.repo),
+        "languages": snapshot.languages,
+        "community": asdict(snapshot.community),
+        "activity": asdict(snapshot.activity),
+        "score": asdict(score),
+        "partial_errors": snapshot.partial_errors,
+        "private_mode": private_mode,
+    }
+    _store_analysis_result(analysis_id, repo_url=payload.get("url", ""), private_mode=private_mode, payload=response_payload)
+
+    return jsonify(response_payload)
 
 
 @bp.post("/api/agent/analyze")
@@ -84,13 +92,14 @@ def agent_analyze():
         raise ValidationError("模型参数未配置，无法启动 AI 深度分析。")
 
     payload = _json_payload()
-    repo_url = payload.get("url", "")
+    analysis = _completed_analysis(payload)
+    repo_url = analysis["url"]
     ref = parse_github_repo_url(repo_url)
-    private_mode = _private_mode(payload)
+    private_mode = bool(analysis["private_mode"])
     if private_mode:
         _require_private_model_confirmation(payload)
-    system_score = _dict_payload_value(payload, "system_score")
-    detected_info = _dict_payload_value(payload, "detected_info")
+    system_score = analysis["system_score"]
+    detected_info = analysis["detected_info"]
 
     permissions = session.get("github_installation_permissions", {}) if private_mode else {}
     if not isinstance(permissions, dict):
@@ -128,6 +137,66 @@ def _dict_payload_value(payload: dict, key: str) -> dict:
     if not isinstance(value, dict):
         raise ValidationError(f"{key} must be a JSON object.")
     return value
+
+
+def _store_analysis_result(analysis_id: str, *, repo_url: str, private_mode: bool, payload: dict) -> None:
+    owner_id = _analysis_owner_id()
+    session[_ANALYSIS_SESSION_KEY] = analysis_id
+    _analysis_cache()[analysis_id] = {
+        "owner_id": owner_id,
+        "url": repo_url,
+        "private_mode": private_mode,
+        "system_score": payload["score"],
+        "detected_info": {
+            "repository": payload["repository"],
+            "languages": payload["languages"],
+            "community": payload["community"],
+            "activity": payload["activity"],
+            "partial_errors": payload["partial_errors"],
+        },
+    }
+
+
+def _completed_analysis(payload: dict) -> dict:
+    analysis_id = payload.get("analysis_id")
+    if not isinstance(analysis_id, str) or not analysis_id:
+        raise PermissionRequiredError("AI analysis requires a completed system analysis in this session.")
+    analysis = _analysis_cache().get(analysis_id)
+    if not isinstance(analysis, dict):
+        raise PermissionRequiredError("Completed system analysis expired; please run system analysis again.")
+    if analysis.get("owner_id") != session.get(_ANALYSIS_OWNER_SESSION_KEY):
+        raise PermissionRequiredError("AI analysis requires a completed system analysis in this session.")
+
+    repo_url = analysis.get("url")
+    system_score = analysis.get("system_score")
+    detected_info = analysis.get("detected_info")
+    private_mode = analysis.get("private_mode")
+    if not isinstance(repo_url, str) or not isinstance(system_score, dict) or not isinstance(detected_info, dict):
+        raise PermissionRequiredError("Completed system analysis expired; please run system analysis again.")
+    if not isinstance(private_mode, bool):
+        raise PermissionRequiredError("Completed system analysis expired; please run system analysis again.")
+    return {
+        "url": repo_url,
+        "private_mode": private_mode,
+        "system_score": system_score,
+        "detected_info": detected_info,
+    }
+
+
+def _analysis_cache() -> dict[str, dict]:
+    cache = current_app.extensions.setdefault(_ANALYSIS_CACHE_EXTENSION, {})
+    if not isinstance(cache, dict):
+        current_app.extensions[_ANALYSIS_CACHE_EXTENSION] = {}
+        return current_app.extensions[_ANALYSIS_CACHE_EXTENSION]
+    return cache
+
+
+def _analysis_owner_id() -> str:
+    owner_id = session.get(_ANALYSIS_OWNER_SESSION_KEY)
+    if not isinstance(owner_id, str) or not owner_id:
+        owner_id = uuid4().hex
+        session[_ANALYSIS_OWNER_SESSION_KEY] = owner_id
+    return owner_id
 
 
 def _require_private_model_confirmation(payload: dict) -> None:
@@ -240,11 +309,13 @@ def github_app_clear():
 
 @bp.get("/api/github-app/session")
 def github_app_session():
+    _analysis_owner_id()
     settings = current_app.config["APP_SETTINGS"]
     installed = bool(session.get("github_installation_id"))
     return jsonify(
         {
             "configured": bool(settings.github_app_configured),
+            "agent_configured": bool(settings.agent_configured),
             "installed": installed,
             "installation_id": installed,
             "setup_action": session.get("github_app_setup_action"),
@@ -270,5 +341,18 @@ def _json_payload() -> dict:
 
 
 def _clear_github_app_session() -> None:
+    analysis_id = session.pop(_ANALYSIS_SESSION_KEY, None)
+    owner_id = session.pop(_ANALYSIS_OWNER_SESSION_KEY, None)
+    if isinstance(owner_id, str):
+        _clear_analysis_cache_for_owner(owner_id)
+    elif isinstance(analysis_id, str):
+        _analysis_cache().pop(analysis_id, None)
     for key in _GITHUB_APP_SESSION_KEYS:
         session.pop(key, None)
+
+
+def _clear_analysis_cache_for_owner(owner_id: str) -> None:
+    cache = _analysis_cache()
+    for analysis_id, analysis in list(cache.items()):
+        if isinstance(analysis, dict) and analysis.get("owner_id") == owner_id:
+            cache.pop(analysis_id, None)

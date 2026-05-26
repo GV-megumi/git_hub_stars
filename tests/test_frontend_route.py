@@ -87,11 +87,13 @@ def test_static_javascript_wires_agent_analysis_endpoint_and_private_confirmatio
     assert "function runAgentAnalysis" in js
     assert 'fetch("/api/agent/analyze"' in js
     assert "confirm_private_data_to_model" in js
+    assert "analysis_id: state.lastAnalysis.analysis_id" in js
+    assert "agent_configured" in js
+    assert "function isAgentConfigured" in js
     assert "agent-private-confirm" in js
     assert "renderAgentResult" in js
     assert "state.lastAnalysis" in js
     assert "state.lastAnalysisUrl" in js
-    assert 'url: state.lastAnalysisUrl || ""' in js
     assert "state.analysisVersion" in js
     assert "state.analysisVersion += 1" in js
     assert "const requestVersion = beginAnalysisRefresh()" in js

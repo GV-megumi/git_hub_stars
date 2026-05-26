@@ -81,6 +81,7 @@ def test_setup_verifies_installation_resets_old_session_and_exposes_non_sensitiv
     assert initial.status_code == 200
     assert initial.get_json() == {
         "configured": True,
+        "agent_configured": False,
         "installed": False,
         "installation_id": False,
         "repository_selection": None,
@@ -99,6 +100,16 @@ def test_setup_verifies_installation_resets_old_session_and_exposes_non_sensitiv
         session["github_installation_account"] = {"login": "old-org"}
         session["github_installation_token"] = "secret-token"
         session["github_app_private_key_path"] = "secret.pem"
+        session["last_analysis_id"] = "old-analysis"
+        session["analysis_owner_id"] = "owner-token"
+    app.extensions.setdefault("repo_health_analysis_cache", {})["old-analysis"] = {
+        "owner_id": "owner-token",
+        "private": "summary",
+    }
+    app.extensions["repo_health_analysis_cache"]["other-analysis"] = {
+        "owner_id": "other-owner",
+        "private": "summary",
+    }
 
     setup = client.get(
         "/github-app/setup"
@@ -124,11 +135,16 @@ def test_setup_verifies_installation_resets_old_session_and_exposes_non_sensitiv
         }
         assert "github_installation_token" not in session
         assert "github_app_private_key_path" not in session
+        assert "last_analysis_id" not in session
+        assert "analysis_owner_id" not in session
+    assert "old-analysis" not in app.extensions["repo_health_analysis_cache"]
+    assert "other-analysis" in app.extensions["repo_health_analysis_cache"]
 
     status = client.get("/api/github-app/session")
 
     payload = status.get_json()
     assert payload["configured"] is True
+    assert payload["agent_configured"] is False
     assert payload["installed"] is True
     assert payload["installation_id"] is True
     assert payload["setup_action"] == "install"

@@ -123,8 +123,8 @@ AI agent 增强只读权限：
 
 - `GET /`: Web 页面。
 - `GET /api/health`: 服务健康检查。
-- `POST /api/analyze`: 系统体检。
-- `POST /api/agent/analyze`: AI agent 深度分析。
+- `POST /api/analyze`: 系统体检，返回系统评分和 `analysis_id`。
+- `POST /api/agent/analyze`: AI agent 深度分析，必须传入本会话一次已完成系统体检返回的 `analysis_id`；私有仓库还必须传入 `confirm_private_data_to_model: true`。
 - `GET /github-app/install`: 跳转 GitHub App 安装页。
 - `GET /github-app/setup`: GitHub App 安装回调。
 - `GET /api/github-app/session`: 当前安装授权状态。

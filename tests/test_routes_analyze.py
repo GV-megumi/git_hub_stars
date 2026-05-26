@@ -107,12 +107,19 @@ def test_analyze_public_repository_returns_score_without_github_app_config(monke
     assert collected_refs[0].full_name == "owner/repo"
     assert scored_snapshots == [snapshot]
     assert payload["repository"]["full_name"] == "owner/repo"
+    assert isinstance(payload["analysis_id"], str)
     assert payload["score"]["score"] == 81
     assert payload["languages"] == {"Python": 80.0, "HTML": 20.0}
     assert payload["community"]["health_percentage"] == 80
     assert payload["activity"]["recent_commits_count"] == 6
     assert payload["partial_errors"] == []
     assert payload["private_mode"] is False
+    with client.session_transaction() as session:
+        assert session["last_analysis_id"] == payload["analysis_id"]
+    assert app.extensions["repo_health_analysis_cache"][payload["analysis_id"]]["url"] == "https://github.com/owner/repo"
+    assert app.extensions["repo_health_analysis_cache"][payload["analysis_id"]]["private_mode"] is False
+    assert "owner_id" in app.extensions["repo_health_analysis_cache"][payload["analysis_id"]]
+    assert app.extensions["repo_health_analysis_cache"][payload["analysis_id"]]["system_score"]["score"] == 81
 
 
 def test_analyze_rejects_non_boolean_private_mode(monkeypatch):
@@ -249,9 +256,15 @@ def test_analyze_private_mode_uses_installation_token_without_leaking_it(monkeyp
     assert collected_refs[0].full_name == "owner/private-repo"
     assert collected_refs[0].repo == "private-repo"
     assert payload["private_mode"] is True
+    assert isinstance(payload["analysis_id"], str)
     assert "installation-token" not in json.dumps(payload)
     with client.session_transaction() as session:
         assert "github_installation_token" not in session
+        assert session["last_analysis_id"] == payload["analysis_id"]
+    analysis = app.extensions["repo_health_analysis_cache"][payload["analysis_id"]]
+    assert analysis["url"] == "https://github.com/owner/private-repo"
+    assert analysis["private_mode"] is True
+    assert analysis["system_score"]["score"] == score.score
 
 
 def test_analyze_private_mode_rejects_token_response_without_token(monkeypatch):
