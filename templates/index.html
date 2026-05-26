@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GitHub 仓库体检</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="top-strip">
+      <div>
+        <p class="eyebrow">Repository Health Console</p>
+        <h1>GitHub 仓库体检</h1>
+      </div>
+      <div class="status-line" id="github-app-status" aria-live="polite">正在读取 GitHub App 状态...</div>
+    </header>
+
+    <section class="workbench" aria-label="仓库体检工具">
+      <form id="repo-form" class="repo-form">
+        <label class="field-label" for="repo-url">仓库 URL</label>
+        <div class="input-row">
+          <input id="repo-url" name="url" type="url" inputmode="url" autocomplete="url"
+            placeholder="https://github.com/owner/repo" required>
+          <button id="analyze-button" class="primary-button" type="submit">开始体检</button>
+        </div>
+        <div class="mode-row" role="radiogroup" aria-label="仓库访问模式">
+          <label class="mode-option">
+            <input id="mode-public" type="radio" name="repo-mode" value="public" checked>
+            <span>公开模式</span>
+          </label>
+          <label class="mode-option">
+            <input id="mode-private" type="radio" name="repo-mode" value="private">
+            <span>私有模式</span>
+          </label>
+        </div>
+        <p id="form-message" class="form-message" role="status" aria-live="polite"></p>
+      </form>
+
+      <aside class="app-panel" aria-labelledby="github-app-title">
+        <div class="panel-title-row">
+          <h2 id="github-app-title">GitHub App 授权</h2>
+          <span id="github-app-badge" class="state-badge">未知</span>
+        </div>
+        <p id="github-app-detail" class="muted-text">公开仓库可匿名体检；私有仓库需要只读 GitHub App installation。</p>
+        <div id="github-app-meta" class="meta-grid"></div>
+        <div class="button-row">
+          <a id="github-app-install" class="secondary-button" href="/github-app/install">安装或更新授权</a>
+          <button id="github-app-clear" class="quiet-button" type="button">清除本地状态</button>
+        </div>
+      </aside>
+    </section>
+
+    <section class="summary-band" aria-labelledby="summary-title">
+      <div class="score-block">
+        <p class="eyebrow">System Score</p>
+        <div id="score-value" class="score-value">--</div>
+        <div id="score-status" class="score-status">等待分析</div>
+      </div>
+      <div class="summary-copy">
+        <h2 id="summary-title">系统评分摘要</h2>
+        <p id="repo-name" class="repo-name">输入 GitHub 仓库 URL 后开始体检。</p>
+        <p id="repo-description" class="muted-text">系统会读取仓库基础信息、社区健康、活跃度和语言组成。</p>
+        <div class="summary-tags">
+          <span id="mode-badge" class="state-badge">公开模式</span>
+          <span id="community-health" class="state-badge neutral">社区健康 --</span>
+          <span id="partial-errors-count" class="state-badge neutral">部分错误 0</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="metrics-band" aria-label="仓库关键指标">
+      <div id="metrics-grid" class="metrics-grid">
+        <div class="metric-tile"><span>Stars</span><strong>--</strong></div>
+        <div class="metric-tile"><span>Forks</span><strong>--</strong></div>
+        <div class="metric-tile"><span>Issues</span><strong>--</strong></div>
+        <div class="metric-tile"><span>Watchers</span><strong>--</strong></div>
+        <div class="metric-tile"><span>默认分支</span><strong>--</strong></div>
+      </div>
+    </section>
+
+    <section class="visual-grid" aria-label="可视化评分">
+      <div class="chart-panel">
+        <div class="panel-title-row">
+          <h2>语言分布图</h2>
+          <span id="language-total" class="muted-text">无数据</span>
+        </div>
+        <canvas id="language-chart" width="640" height="320" aria-label="语言分布图"></canvas>
+        <div id="language-legend" class="legend-list"></div>
+      </div>
+      <div class="chart-panel">
+        <div class="panel-title-row">
+          <h2>维度评分图</h2>
+          <span id="score-dimension-count" class="muted-text">无数据</span>
+        </div>
+        <canvas id="score-chart" width="640" height="320" aria-label="维度评分图"></canvas>
+      </div>
+    </section>
+
+    <section class="detail-grid" aria-label="体检明细">
+      <div class="app-panel">
+        <h2>社区与活动</h2>
+        <div id="community-list" class="check-list"></div>
+        <div id="activity-list" class="fact-list"></div>
+      </div>
+      <div class="app-panel">
+        <h2>风险和建议</h2>
+        <div class="list-block">
+          <h3>风险</h3>
+          <ul id="risk-list" class="stack-list"></ul>
+        </div>
+        <div class="list-block">
+          <h3>建议</h3>
+          <ul id="recommendation-list" class="stack-list"></ul>
+        </div>
+        <div class="list-block">
+          <h3>部分错误</h3>
+          <ul id="partial-errors-list" class="stack-list"></ul>
+        </div>
+      </div>
+      <div class="app-panel agent-panel">
+        <div class="panel-title-row">
+          <h2>Agent 分析</h2>
+          <span class="state-badge neutral">扩展功能</span>
+        </div>
+        <p id="agent-note" class="muted-text">深度分析入口已预留。私有仓库后续接入时会要求单独确认后才发送数据给模型。</p>
+        <button id="agent-button" class="quiet-button" type="button" disabled>稍后接入</button>
+      </div>
+    </section>
+  </main>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

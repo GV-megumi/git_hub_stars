@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from flask import Blueprint, current_app, jsonify, redirect, request, session
+from flask import Blueprint, current_app, jsonify, redirect, render_template, request, session
 
 from app.analyzer.collector import collect_repository_snapshot
 from app.analyzer.scoring import score_repository
@@ -25,6 +25,11 @@ _GITHUB_APP_SESSION_KEYS = (
     "github_installation_token",
     "github_app_private_key_path",
 )
+
+
+@bp.get("/")
+def index():
+    return render_template("index.html")
 
 
 @bp.get("/api/health")
