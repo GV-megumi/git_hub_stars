@@ -717,9 +717,11 @@ function createAgentToolBlock(result) {
 
 function describeAgentItem(item) {
   if (item && typeof item === "object") {
-    const title = item.title || item.message || item.summary || item.code;
+    const title = item.title || item.summary || item.code;
+    const message = item.message && item.message !== title ? item.message : "";
+    const detail = [title, message].filter(Boolean).join(" - ") || item.message;
     const level = item.level || item.severity || item.type;
-    return [level, title].filter(Boolean).join(": ") || JSON.stringify(item);
+    return [level, detail].filter(Boolean).join(": ") || JSON.stringify(item);
   }
   return String(item);
 }

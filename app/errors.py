@@ -74,6 +74,37 @@ class GithubRateLimitError(GithubApiError):
         return payload
 
 
+class LlmProviderError(AppError):
+    status_code = 502
+    code = "llm_provider_error"
+
+    def __init__(
+        self,
+        message: str,
+        provider_status_code: int | None = None,
+        provider_error_code: str | None = None,
+        provider_error_type: str | None = None,
+        provider_message: str | None = None,
+    ):
+        super().__init__(message)
+        self.provider_status_code = provider_status_code
+        self.provider_error_code = provider_error_code
+        self.provider_error_type = provider_error_type
+        self.provider_message = provider_message
+
+    def to_dict(self) -> dict[str, object]:
+        payload = super().to_dict()
+        if self.provider_status_code is not None:
+            payload["provider_status_code"] = self.provider_status_code
+        if self.provider_error_code is not None:
+            payload["provider_error_code"] = self.provider_error_code
+        if self.provider_error_type is not None:
+            payload["provider_error_type"] = self.provider_error_type
+        if self.provider_message is not None:
+            payload["provider_message"] = self.provider_message
+        return payload
+
+
 class NotFoundError(AppError):
     status_code = 404
     code = "not_found"

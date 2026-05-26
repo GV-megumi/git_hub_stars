@@ -108,6 +108,13 @@ def test_static_javascript_wires_agent_analysis_endpoint_and_private_confirmatio
     assert "eval(" not in js
 
 
+def test_static_javascript_agent_findings_include_title_and_message():
+    js = Path("static/js/app.js").read_text(encoding="utf-8")
+
+    assert "const message = item.message && item.message !== title ? item.message : \"\";" in js
+    assert "[title, message].filter(Boolean).join(\" - \")" in js
+
+
 def test_static_javascript_renders_complete_community_checklist():
     js = Path("static/js/app.js").read_text(encoding="utf-8")
 

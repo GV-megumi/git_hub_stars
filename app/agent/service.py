@@ -59,17 +59,40 @@ def build_agent_prompt(
 
     return "\n".join(
         [
-            "你是 Github 仓库健康分析 agent。请用中文分析仓库健康度，并只输出 JSON。",
+            "你是 Github 仓库健康分析 agent。请用中文分析仓库健康度，并只输出严格 JSON。",
             f"仓库链接：{repo_url}",
             f"仓库模式：{mode_guidance}",
             f"系统评分：{_json(system_score)}",
             f"基础探测信息：{_json(detected_info or {})}",
             f"GitHub 工具摘要：{_json(github_context or {})}",
             f"Tavily 证据：{_json(tavily_context or {})}",
-            "判断系统评分是否遗漏了重要背景；公开信息不足时请降低 confidence，不要编造。",
             (
-                "输出 JSON 对象，字段必须包含：ai_score（0-100 数字）、confidence、summary、"
-                "findings、recommendations、references。findings 和 references 使用数组。"
+                "评分要求：ai_score 是你对系统评分的二次校准，0-100 分；如果系统评分合理，"
+                "可保持接近系统评分；只有在 GitHub/Tavily 证据清楚支持时才上调或下调。"
+            ),
+            (
+                "置信度要求：confidence 只能是 high、medium、low。GitHub 摘要、README/关键文件、"
+                "近期活动和 Tavily 公开证据都可用且互相一致时用 high；有少量工具不可用但核心证据足够时用 medium；"
+                "核心证据不足、工具错误较多或只能推断时用 low。证据充分时不要机械降为 low。"
+            ),
+            (
+                "证据要求：只引用输入中实际存在的 GitHub 工具摘要或 Tavily 证据；不要编造不存在的指标、"
+                "链接、版本、漏洞或社区状态。私有模式下不得建议使用 Tavily 或公开网页证据。"
+            ),
+            (
+                "输出 JSON 对象，字段必须包含：ai_score、confidence、summary、findings、recommendations、references。"
+                "summary 用 2-4 句概括总体健康度、主要优势和主要风险。"
+            ),
+            (
+                "findings 每项必须包含 level、title、message；level 只能是 positive、warning、risk、info；"
+                "message 用一句话说明证据和影响。"
+            ),
+            (
+                "recommendations 使用字符串数组，给出可执行建议，避免泛泛而谈。"
+            ),
+            (
+                "references 每项必须包含 title、url、evidence；url 必须来自仓库链接、GitHub 摘要中的 html_url/source，"
+                "或 Tavily 证据中的 url；没有 URL 时不要创建 reference。"
             ),
         ]
     )

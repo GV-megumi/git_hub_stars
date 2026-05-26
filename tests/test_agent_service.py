@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from openai import BadRequestError
+from openai import APIStatusError, BadRequestError
 
 from app.agent.llm import LlmClient
 from app.agent.service import build_agent_prompt, run_agent_analysis, should_enable_tavily
@@ -39,6 +39,10 @@ def test_prompt_includes_repo_score_context_and_private_tavily_constraint():
     assert "不向公开网页工具发送私有数据" in prompt
     assert "ai_score" in prompt
     assert "references" in prompt
+    assert "confidence 只能是 high、medium、low" in prompt
+    assert "findings 每项必须包含 level、title、message" in prompt
+    assert "references 每项必须包含 title、url、evidence" in prompt
+    assert "证据充分时不要机械降为 low" in prompt
 
 
 def test_tavily_search_posts_expected_body_and_returns_bounded_results():
@@ -218,7 +222,53 @@ def test_llm_client_retries_without_response_format_for_unsupported_bad_request(
     assert "response_format" not in create_calls[1]
 
 
-def test_llm_client_does_not_retry_unrelated_bad_request(monkeypatch):
+def test_llm_client_wraps_provider_error_after_type_error_response_format_retry(monkeypatch):
+    from app.errors import LlmProviderError
+
+    create_calls = []
+    response = httpx.Response(
+        503,
+        request=httpx.Request("POST", "https://model.example.test/v1/chat/completions"),
+    )
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            create_calls.append(kwargs)
+            if "response_format" in kwargs:
+                raise TypeError("unexpected keyword argument 'response_format'")
+            raise APIStatusError(
+                "Provider failed",
+                response=response,
+                body={
+                    "code": "model_not_found",
+                    "message": "No available channel for model model-a",
+                    "type": "new_api_error",
+                },
+            )
+
+    class FakeOpenAI:
+        def __init__(self, base_url, api_key):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr("app.agent.llm.OpenAI", FakeOpenAI)
+
+    client = LlmClient(
+        base_url="https://model.example.test/v1",
+        api_key="model-key",
+        model="model-a",
+    )
+
+    with pytest.raises(LlmProviderError) as error:
+        client.complete_json("analyze this")
+
+    assert len(create_calls) == 2
+    assert "response_format" not in create_calls[1]
+    assert error.value.to_dict()["provider_error_code"] == "model_not_found"
+
+
+def test_llm_client_wraps_unrelated_bad_request_without_retry(monkeypatch):
+    from app.errors import LlmProviderError
+
     create_calls = []
     response = httpx.Response(400, request=httpx.Request("POST", "https://model.example.test/v1/chat"))
 
@@ -239,9 +289,242 @@ def test_llm_client_does_not_retry_unrelated_bad_request(monkeypatch):
         model="model-a",
     )
 
-    with pytest.raises(BadRequestError):
+    with pytest.raises(LlmProviderError) as error:
         client.complete_json("analyze this")
     assert len(create_calls) == 1
+    assert error.value.to_dict()["provider_status_code"] == 400
+
+
+def test_llm_client_does_not_wrap_unrelated_type_error(monkeypatch):
+    class FakeCompletions:
+        def create(self, **kwargs):
+            raise TypeError("local sdk mismatch")
+
+    class FakeOpenAI:
+        def __init__(self, base_url, api_key):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr("app.agent.llm.OpenAI", FakeOpenAI)
+
+    client = LlmClient(
+        base_url="https://model.example.test/v1",
+        api_key="model-key",
+        model="model-a",
+    )
+
+    with pytest.raises(TypeError, match="local sdk mismatch"):
+        client.complete_json("analyze this")
+
+
+def test_llm_client_wraps_provider_status_errors(monkeypatch):
+    from app.errors import LlmProviderError
+
+    response = httpx.Response(
+        503,
+        request=httpx.Request("POST", "https://model.example.test/v1/chat/completions"),
+    )
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            raise APIStatusError(
+                "Provider failed",
+                response=response,
+                body={
+                    "error": {
+                        "code": "model_not_found",
+                        "message": "No available channel for model model-a",
+                        "type": "new_api_error",
+                    }
+                },
+            )
+
+    class FakeOpenAI:
+        def __init__(self, base_url, api_key):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr("app.agent.llm.OpenAI", FakeOpenAI)
+
+    client = LlmClient(
+        base_url="https://model.example.test/v1",
+        api_key="model-key",
+        model="model-a",
+    )
+
+    with pytest.raises(LlmProviderError) as error:
+        client.complete_json("analyze this")
+
+    payload = error.value.to_dict()
+    assert error.value.status_code == 502
+    assert payload["error"] == "llm_provider_error"
+    assert "MODEL_NAME" in payload["message"]
+    assert payload["provider_status_code"] == 503
+    assert payload["provider_error_code"] == "model_not_found"
+    assert payload["provider_error_type"] == "new_api_error"
+    assert payload["provider_message"] == "No available channel for model model-a"
+    assert "model-key" not in json.dumps(payload)
+
+
+def test_llm_client_does_not_expose_unsafe_provider_message(monkeypatch):
+    from app.errors import LlmProviderError
+
+    response = httpx.Response(
+        401,
+        request=httpx.Request("POST", "https://model.example.test/v1/chat/completions"),
+    )
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            raise APIStatusError(
+                "Provider failed",
+                response=response,
+                body={
+                    "code": "invalid_api_key",
+                    "message": "Authorization failed for Bearer sk-sensitive-token",
+                    "type": "auth_error",
+                },
+            )
+
+    class FakeOpenAI:
+        def __init__(self, base_url, api_key):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr("app.agent.llm.OpenAI", FakeOpenAI)
+
+    client = LlmClient(
+        base_url="https://model.example.test/v1",
+        api_key="model-key",
+        model="model-a",
+    )
+
+    with pytest.raises(LlmProviderError) as error:
+        client.complete_json("analyze this")
+
+    payload = error.value.to_dict()
+    assert payload["provider_error_code"] == "invalid_api_key"
+    assert payload["provider_error_type"] == "auth_error"
+    assert "provider_message" not in payload
+    assert "sk-sensitive-token" not in json.dumps(payload)
+
+
+def test_llm_client_redacts_safe_provider_messages(monkeypatch):
+    from app.errors import LlmProviderError
+
+    response = httpx.Response(
+        503,
+        request=httpx.Request("POST", "https://model.example.test/v1/chat/completions"),
+    )
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            raise APIStatusError(
+                "Provider failed",
+                response=response,
+                body={
+                    "code": "model_not_found",
+                    "message": "No channel for model-a with api_key=sk-sensitive-token",
+                    "type": "new_api_error",
+                },
+            )
+
+    class FakeOpenAI:
+        def __init__(self, base_url, api_key):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr("app.agent.llm.OpenAI", FakeOpenAI)
+
+    client = LlmClient(
+        base_url="https://model.example.test/v1",
+        api_key="model-key",
+        model="model-a",
+    )
+
+    with pytest.raises(LlmProviderError) as error:
+        client.complete_json("analyze this")
+
+    payload = error.value.to_dict()
+    assert payload["provider_message"] == "No channel for model-a with api_key=[REDACTED]"
+    assert "sk-sensitive-token" not in json.dumps(payload)
+
+
+def test_llm_client_extracts_provider_error_from_response_json(monkeypatch):
+    from app.errors import LlmProviderError
+
+    response = httpx.Response(
+        503,
+        request=httpx.Request("POST", "https://model.example.test/v1/chat/completions"),
+        json={
+            "error": {
+                "code": "model_not_found",
+                "message": "No available channel for model model-a",
+                "type": "new_api_error",
+            }
+        },
+    )
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            raise APIStatusError("Provider failed", response=response, body=None)
+
+    class FakeOpenAI:
+        def __init__(self, base_url, api_key):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr("app.agent.llm.OpenAI", FakeOpenAI)
+
+    client = LlmClient(
+        base_url="https://model.example.test/v1",
+        api_key="model-key",
+        model="model-a",
+    )
+
+    with pytest.raises(LlmProviderError) as error:
+        client.complete_json("analyze this")
+
+    payload = error.value.to_dict()
+    assert payload["provider_error_code"] == "model_not_found"
+    assert payload["provider_error_type"] == "new_api_error"
+    assert payload["provider_message"] == "No available channel for model model-a"
+
+
+def test_llm_client_extracts_provider_error_from_direct_body(monkeypatch):
+    from app.errors import LlmProviderError
+
+    response = httpx.Response(
+        503,
+        request=httpx.Request("POST", "https://model.example.test/v1/chat/completions"),
+    )
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            raise APIStatusError(
+                "Provider failed",
+                response=response,
+                body={
+                    "code": "model_not_found",
+                    "message": "No available channel for model model-a",
+                    "type": "new_api_error",
+                },
+            )
+
+    class FakeOpenAI:
+        def __init__(self, base_url, api_key):
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setattr("app.agent.llm.OpenAI", FakeOpenAI)
+
+    client = LlmClient(
+        base_url="https://model.example.test/v1",
+        api_key="model-key",
+        model="model-a",
+    )
+
+    with pytest.raises(LlmProviderError) as error:
+        client.complete_json("analyze this")
+
+    payload = error.value.to_dict()
+    assert payload["provider_error_code"] == "model_not_found"
+    assert payload["provider_error_type"] == "new_api_error"
+    assert payload["provider_message"] == "No available channel for model model-a"
 
 
 def test_run_agent_analysis_uses_github_tools_tavily_and_parses_llm_json():
