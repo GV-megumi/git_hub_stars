@@ -2,13 +2,13 @@
 
 ## 1. 项目背景
 
-本工具用于分析公开 Github 仓库的基础状态、活跃度、社区规范和潜在维护风险。用户可以先通过 Github 登录授权，系统使用登录会话中的授权访问 Github API；用户输入一个公开仓库 URL 后，系统先返回确定性的系统检测结果和系统评分，再允许用户单独触发 AI agent 深度分析。
+本工具用于分析 Github 仓库的基础状态、活跃度、社区规范和潜在维护风险。公开仓库无需登录即可分析；私有仓库通过 GitHub App 安装授权访问。用户输入仓库 URL 后，系统先返回确定性的系统检测结果和系统评分，再允许用户单独触发 AI agent 深度分析。
 
 第一版目标是做成一个本地 Web 工具，技术栈使用 Python 后端和 HTML/CSS/JavaScript 前端，环境通过 conda 初始化。
 
 ## 2. 用户目标
 
-- 快速判断一个公开 Github 仓库是否活跃、规范、值得关注或依赖。
+- 快速判断一个公开仓库或已授权私有仓库是否活跃、规范、值得关注或依赖。
 - 用图表看清 Star、Fork、Issue、语言分布、维护活跃度等基础指标。
 - 获得明确的健康状态和可执行建议，而不是只看原始数字。
 - 在需要时单独启动 AI agent 分析，让 agent 结合搜索结果、仓库页面和基础检测信息给出更深入的评分和建议。
@@ -16,24 +16,26 @@
 ## 3. 核心流程
 
 1. 用户打开 Web 页面。
-2. 用户点击“使用 Github 登录”，完成 OAuth 授权。
-3. 用户输入公开 Github 仓库 URL，例如 `https://github.com/fastapi/fastapi`。
-4. 用户点击“开始体检”。
-5. 后端解析出 `owner/repo`。
-6. 后端优先使用登录会话中的 Github OAuth access token 调用 Github REST API 获取基础数据。
-7. 系统生成确定性的系统评分、健康状态、图表数据和风险提示。
-8. 前端优先展示系统评分和状态。
-9. 用户可点击“AI 深度分析”单独启动 agent 分析。
-10. AI agent 接收仓库链接、系统提示词和已探测到的基础信息，自行调用 Tavily 搜索/网页提取能力补充上下文，最后返回 AI 评分、分析结论和建议。
+2. 用户输入仓库 URL，例如 `https://github.com/fastapi/fastapi`。
+3. 用户点击“开始体检”。
+4. 后端解析出 `owner/repo`。
+5. 如果仓库是公开仓库，后端直接使用 Github 公开 REST API 获取基础数据，无需登录。
+6. 如果公开 API 返回私有或无权限错误，页面提示用户安装/授权 GitHub App。
+7. 用户完成 GitHub App 安装授权后，后端使用 installation access token 访问授权范围内的私有仓库。
+8. 系统生成确定性的系统评分、健康状态、图表数据和风险提示。
+9. 前端优先展示系统评分和状态。
+10. 用户可点击“AI 深度分析”单独启动 agent 分析。
+11. AI agent 接收仓库链接、系统提示词和已探测到的基础信息，自行调用 Tavily 搜索/网页提取能力补充上下文，最后返回 AI 评分、分析结论和建议。
 
 ## 4. 功能范围
 
 ### 4.1 MVP 必须支持
 
-- 输入公开 Github 仓库 URL。
+- 输入公开 Github 仓库 URL，或输入 GitHub App 已授权访问的私有仓库 URL。
 - 校验 URL 是否为 Github 仓库地址。
-- 支持 Github 登录、登录状态展示和退出登录。
-- 不在 `.env` 中配置静态 `GITHUB_TOKEN`；Github API token 来自用户 OAuth 登录会话。
+- 公开仓库无需登录即可分析。
+- 支持 GitHub App 安装授权状态展示、安装入口和取消本地授权状态。
+- 不在 `.env` 中配置静态 `GITHUB_TOKEN`；私有仓库访问 token 由 GitHub App installation token 临时生成。
 - 获取仓库基础信息：名称、描述、Owner、默认分支、创建时间、更新时间、最近 push 时间、仓库大小、是否 archived、是否 fork。
 - 获取热度指标：Star 数、Fork 数、Watcher/Subscriber 数、Open Issues 数。
 - 获取语言分布：调用 Github Languages API，计算各语言字节占比。
@@ -41,20 +43,35 @@
 - 获取维护活跃信息：近 30/90 天提交数量、贡献者数量、Release 数、最近 Release。
 - 生成系统评分、状态等级和风险提示。
 - 通过图表展示语言分布、评分维度、关键指标。
-- 支持错误提示：URL 无效、仓库不存在、API 限流、Github 网络失败。
+- 支持错误提示：URL 无效、仓库不存在、API 限流、Github 网络失败、私有仓库未授权。
 
-### 4.2 Github 登录
+### 4.2 GitHub App 安装授权
 
-Github 登录用于替代静态 Github token 配置。系统只在 `.env` 中保存 OAuth App 配置，不保存用户 access token。
+GitHub App 安装授权用于私有仓库分析。公开仓库必须支持无需登录分析；只有当用户要分析私有仓库，或公开 API 额度不足时，才引导用户安装/授权 GitHub App。
 
-登录设计：
+授权设计：
 
-- 使用 Github OAuth App。
-- `.env` 保存 `GITHUB_CLIENT_ID`、`GITHUB_CLIENT_SECRET`、`GITHUB_OAUTH_CALLBACK_URL` 和 Flask 会话密钥。
-- 用户 access token 存在服务端 session 中，默认不落盘、不写日志、不写 `.env`。
-- 第一版只分析公开仓库，不申请私有仓库 `repo` scope。
-- 登录失败、授权取消、session 过期时给出明确提示。
-- 未登录时可以提示用户先登录；如果后续决定保留游客模式，游客模式只支持低频公开仓库分析。
+- 使用 GitHub App，不使用 OAuth App，也不使用个人访问令牌。
+- 用户在 GitHub 安装页选择安装到个人账号或组织。
+- 用户可选择授权全部仓库或指定仓库。
+- GitHub App 权限采用最小权限原则，第一版只申请只读权限。
+- `.env` 保存 GitHub App 的 App ID、App slug、私钥路径、安装回调 URL 和 Flask 会话密钥。
+- 后端通过 App JWT 调用 GitHub API，为具体 installation 生成短期 installation access token。
+- 创建 installation access token 时，按需限制到当前仓库和当前接口所需权限，不能扩大到 GitHub App 未被授予的权限。
+- installation access token 默认只短期存在于服务端内存/session，不写入 `.env`、日志或长期存储。
+- 用户取消授权、安装被移除、安装未包含目标仓库、权限不足时给出明确提示。
+
+建议的 GitHub App 只读权限：
+
+| 权限 | 级别 | 用途 |
+| --- | --- | --- |
+| Metadata | Read-only | 读取仓库基础元数据，GitHub App 默认需要 |
+| Contents | Read-only | 读取 README、社区文件、提交、Release、语言相关内容 |
+| Issues | Read-only | 读取 Issue 统计和积压状态 |
+| Pull requests | Read-only | 读取 PR 统计和积压状态 |
+| Commit statuses | Read-only | 可选，用于后续扩展 CI/状态检查 |
+
+如果后续增加安全扫描、依赖分析或 CI 状态分析，再按功能单独增加只读权限，并在页面解释新增权限原因。
 
 ### 4.3 扩展功能：AI Agent 分析
 
@@ -67,6 +84,7 @@ agent 需要具备：
 - 模型配置：从 `.env` 读取模型 `base_url`、`api_key` 和 `model`。
 - 行为：围绕该仓库主动查找 Github 页面、README、Release、Issue/PR 讨论、文档站、社区讨论等公开信息。
 - 输出：AI 评分、评分理由、关键发现、风险解释、改进建议、引用链接。
+- 私有仓库保护：私有仓库的 agent 分析默认不把仓库私有内容发送给 Tavily；Tavily 只用于搜索公开网页。是否把私有仓库基础检测信息发送给模型，需要在页面上明确提示并由用户单独确认。
 
 第一版可以先预留接口和页面入口；agent 实现可作为第二阶段开发。
 
@@ -236,7 +254,10 @@ AI 输出结构：
 - Github Languages API: https://docs.github.com/en/enterprise-server%403.17/rest/repos/repos#list-repository-languages
 - Github Community Metrics API: https://docs.github.com/en/rest/metrics/community
 - Github REST API Rate Limits: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
-- Github OAuth Apps: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps
+- GitHub App 注册: https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app
+- GitHub App 权限: https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app
+- GitHub App 安装: https://docs.github.com/en/apps/using-github-apps/installing-your-own-github-app
+- GitHub App installation access token: https://docs.github.com/en/rest/apps/apps?apiVersion=2022-11-28#create-an-installation-access-token-for-an-app
 - OpenSSF Scorecard: https://github.com/ossf/scorecard
 - Tavily API: https://docs.tavily.com/
 
@@ -246,7 +267,7 @@ AI 输出结构：
 
 主要区域：
 
-- 顶部登录区：Github 登录按钮、当前登录用户、退出登录按钮。
+- 顶部授权区：GitHub App 安装按钮、当前 installation 状态、授权仓库范围提示、取消本地授权状态按钮。
 - 顶部输入区：仓库 URL 输入框、开始体检按钮。
 - 状态总览区：仓库名称、描述、系统健康分、状态标签、最近更新时间。
 - 指标卡片区：Stars、Forks、Open Issues、Contributors、Last Push、Latest Release。
@@ -263,27 +284,28 @@ AI 输出结构：
 - Flask
 - requests
 - python-dotenv
-- Authlib
+- PyJWT
+- cryptography
 - pydantic 或 dataclasses 组织返回数据
 
 后端接口：
 
 - `GET /`：返回页面。
-- `GET /auth/github/login`：跳转 Github OAuth 授权页。
-- `GET /auth/github/callback`：处理 Github OAuth 回调，保存登录会话。
-- `POST /auth/logout`：退出登录并清理 session。
-- `GET /api/session`：返回当前登录状态和 Github 用户基础信息。
+- `GET /github-app/install`：跳转 GitHub App 安装页。
+- `GET /github-app/setup`：处理 GitHub App 安装后的 setup/callback，记录 `installation_id` 和安装状态。
+- `POST /github-app/clear`：清理本地 installation 会话状态，不卸载 GitHub App。
+- `GET /api/github-app/session`：返回当前 GitHub App installation 状态和授权范围。
 - `POST /api/analyze`：执行系统体检，返回系统评分和图表数据。
 - `POST /api/agent/analyze`：执行 AI agent 深度分析，扩展功能。
 - `GET /api/health`：服务健康检查。
 
 服务分层：
 
-- `auth_service`：处理 Github OAuth 登录、回调、退出和 session token 读取。
-- `github_client`：封装 Github REST API 请求，优先使用 session token。
+- `github_app_service`：处理 GitHub App 安装回调、App JWT、installation access token 和权限错误。
+- `github_client`：封装 Github REST API 请求；公开仓库走匿名请求，私有仓库走 installation token。
 - `health_analyzer`：把 Github API 数据转换为系统评分、状态和风险提示。
 - `agent_service`：扩展功能，封装 LLM、Tavily 搜索和网页提取。
-- `config`：从 `.env` 读取 Flask、Github OAuth、Tavily 和模型配置。
+- `config`：从 `.env` 读取 Flask、GitHub App、Tavily 和模型配置。
 
 ### 9.2 前端
 
@@ -295,8 +317,9 @@ AI 输出结构：
 前端状态：
 
 - idle：等待输入。
-- unauthenticated：未登录 Github。
-- authenticated：已登录 Github。
+- public_mode：公开仓库匿名分析模式。
+- app_uninstalled：未安装 GitHub App，无法分析私有仓库。
+- app_installed：GitHub App 已安装，可分析授权范围内的私有仓库。
 - loading：系统体检中。
 - ready：系统体检完成。
 - agent_loading：AI agent 分析中。
@@ -309,10 +332,10 @@ AI 输出结构：
 ```powershell
 conda create -n github-health python=3.11 -y
 conda activate github-health
-pip install flask requests python-dotenv authlib
+pip install flask requests python-dotenv pyjwt cryptography
 ```
 
-使用 `.env` 加载配置。`.env` 只保存应用配置、OAuth App 配置、Tavily 配置和模型配置，不保存用户 Github access token。
+使用 `.env` 加载配置。`.env` 只保存应用配置、GitHub App 配置、Tavily 配置和模型配置，不保存静态 Github token 或 installation access token。
 
 `.env` 示例：
 
@@ -320,9 +343,10 @@ pip install flask requests python-dotenv authlib
 FLASK_ENV=development
 FLASK_SECRET_KEY=replace-with-local-secret
 
-GITHUB_CLIENT_ID=replace-with-github-oauth-client-id
-GITHUB_CLIENT_SECRET=replace-with-github-oauth-client-secret
-GITHUB_OAUTH_CALLBACK_URL=http://127.0.0.1:5000/auth/github/callback
+GITHUB_APP_ID=replace-with-github-app-id
+GITHUB_APP_SLUG=replace-with-github-app-slug
+GITHUB_APP_PRIVATE_KEY_PATH=./secrets/github-app-private-key.pem
+GITHUB_APP_SETUP_URL=http://127.0.0.1:5000/github-app/setup
 
 TAVILY_API_KEY=replace-with-tavily-api-key
 
@@ -331,16 +355,17 @@ MODEL_API_KEY=replace-with-model-api-key
 MODEL_NAME=gpt-4.1-mini
 ```
 
-未配置 Github OAuth App 时，页面提示需要配置登录后才能使用完整体检流程。未配置 `TAVILY_API_KEY`、`MODEL_BASE_URL`、`MODEL_API_KEY` 或 `MODEL_NAME` 时，隐藏或禁用 AI agent 分析入口，但系统评分仍可正常使用。
+未配置 GitHub App 时，公开仓库匿名分析仍可使用；私有仓库分析入口提示需要配置 GitHub App。未配置 `TAVILY_API_KEY`、`MODEL_BASE_URL`、`MODEL_API_KEY` 或 `MODEL_NAME` 时，隐藏或禁用 AI agent 分析入口，但系统评分仍可正常使用。
 
 ## 10. 错误处理
 
 - URL 格式错误：提示用户输入 `https://github.com/{owner}/{repo}`。
-- 仓库不存在或非公开：显示 404 说明。
+- 仓库不存在：显示 404 说明。
+- 私有仓库未授权：提示安装 GitHub App 或调整安装仓库范围。
 - Github API 限流：显示剩余额度和重置时间。
 - 网络超时：允许重试。
-- Github OAuth 配置缺失：提示配置 `.env` 中的 OAuth App 信息。
-- Github 登录失败或 session 过期：提示重新登录。
+- GitHub App 配置缺失：公开仓库可继续匿名分析，私有仓库提示配置 `.env` 中的 GitHub App 信息。
+- GitHub App 安装失败、installation 失效或权限不足：提示重新安装或调整权限。
 - Community Profile 不可用：不阻断整体分析，相关项标记为未知。
 - Agent 分析失败：保留系统评分结果，只提示 AI 分析失败原因。
 
@@ -348,24 +373,27 @@ MODEL_NAME=gpt-4.1-mini
 
 第一版不做：
 
-- 私有仓库分析。
 - 多仓库批量对比。
 - 数据持久化。
 - 定时监控。
 - 自动创建 Github Issue 或 PR。
 - 强制接入 OpenSSF Scorecard。
-- 长期保存用户 Github OAuth token。
+- 长期保存 GitHub App installation access token。
+- 申请写权限或修改用户仓库内容。
 
 ## 12. 验收标准
 
 - 输入合法公开仓库 URL 后，页面能展示系统评分和状态。
+- 输入 GitHub App 已授权访问的私有仓库 URL 后，页面能展示系统评分和状态。
 - 页面能展示 Star、Fork、Open Issues、License、默认语言、最近更新时间。
 - 页面能展示语言分布图。
 - 页面能展示社区健康检查清单。
 - 页面能给出风险提示和改进建议。
 - API 限流、仓库不存在、URL 无效时有明确错误提示。
 - README 写明 conda 初始化和启动方式。
-- README 写明 `.env` 配置项；`.env` 不包含静态 `GITHUB_TOKEN`。
-- 页面支持 Github 登录、登录状态展示和退出登录。
+- README 写明 `.env` 配置项；`.env` 不包含静态 `GITHUB_TOKEN` 或 installation access token。
+- 公开仓库无需登录即可完成系统体检。
+- 页面支持 GitHub App 安装入口、installation 状态展示和本地授权状态清理。
+- 授权范围内的私有仓库可以通过 GitHub App installation token 体检。
 - AI agent 分析入口与系统检测解耦；未配置 Tavily 时系统检测仍可正常使用。
 - 配置 Tavily 和模型参数后，可以单独启动 agent 分析，并得到 AI 评分、引用链接和建议。
