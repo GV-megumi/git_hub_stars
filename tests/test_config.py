@@ -32,6 +32,23 @@ def test_github_app_config_requires_all_values(monkeypatch):
     assert settings.github_app_configured is True
 
 
+def test_create_app_rejects_default_secret_when_github_app_is_configured(monkeypatch):
+    monkeypatch.setenv("FLASK_SECRET_KEY", "")
+    monkeypatch.setenv("GITHUB_APP_ID", "123")
+    monkeypatch.setenv("GITHUB_APP_SLUG", "repo-health")
+    monkeypatch.setenv("GITHUB_APP_PRIVATE_KEY_PATH", "secrets/private-key.pem")
+    monkeypatch.setenv("GITHUB_APP_SETUP_URL", "http://127.0.0.1:5000/github-app/setup")
+
+    settings = Settings.from_env()
+
+    try:
+        create_app(settings)
+    except RuntimeError as exc:
+        assert "FLASK_SECRET_KEY" in str(exc)
+    else:
+        raise AssertionError("GitHub App mode must not run with the development Flask secret key")
+
+
 def test_agent_config_requires_all_model_values(monkeypatch):
     monkeypatch.setenv("MODEL_BASE_URL", "https://api.example.test/v1")
     monkeypatch.setenv("MODEL_API_KEY", "key")

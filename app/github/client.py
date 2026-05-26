@@ -27,13 +27,19 @@ class GithubClient:
         if not self._is_valid_path(path):
             raise ValidationError("GitHub API path must be an internal path starting with '/'.")
 
-        response = requests.get(
-            f"{self.base_url}{path}",
-            params=params,
-            headers=self._headers(),
-            timeout=20,
-            allow_redirects=allow_redirects,
-        )
+        try:
+            response = requests.get(
+                f"{self.base_url}{path}",
+                params=params,
+                headers=self._headers(),
+                timeout=20,
+                allow_redirects=allow_redirects,
+            )
+        except requests.RequestException as exc:
+            raise GithubApiError(
+                f"GitHub API request failed: {exc}.",
+                github_path=path,
+            ) from exc
         github_message = self._github_message(response)
         if self._is_rate_limit_response(response, github_message):
             raise GithubRateLimitError(

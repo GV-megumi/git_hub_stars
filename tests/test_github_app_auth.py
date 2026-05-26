@@ -5,6 +5,7 @@ from pathlib import Path
 
 import jwt
 import pytest
+import requests
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -101,6 +102,54 @@ def test_create_installation_token_posts_default_read_only_permissions_when_omit
     assert requests_mock.last_request.json() == {
         "permissions": {"metadata": "read", "contents": "read"},
     }
+
+
+def test_create_installation_token_maps_network_errors(tmp_path, requests_mock):
+    private_pem, _ = generate_test_key_pair()
+    key_path = tmp_path / "app-private-key.pem"
+    key_path.write_text(private_pem, encoding="utf-8")
+    requests_mock.post(
+        "https://api.example.test/app/installations/456/access_tokens",
+        exc=requests.ReadTimeout("read timed out"),
+    )
+    auth = GithubAppAuth(
+        app_slug="repo-health",
+        app_id="123",
+        private_key_path=key_path,
+        api_base_url="https://api.example.test",
+    )
+
+    with pytest.raises(GithubApiError) as exc_info:
+        auth.create_installation_token("456")
+
+    payload = exc_info.value.to_dict()
+    assert payload["error"] == "github_api_error"
+    assert payload["github_path"] == "/app/installations/456/access_tokens"
+    assert "read timed out" in payload["message"]
+
+
+def test_get_installation_maps_network_errors(tmp_path, requests_mock):
+    private_pem, _ = generate_test_key_pair()
+    key_path = tmp_path / "app-private-key.pem"
+    key_path.write_text(private_pem, encoding="utf-8")
+    requests_mock.get(
+        "https://api.example.test/app/installations/456",
+        exc=requests.ConnectionError("dns failed"),
+    )
+    auth = GithubAppAuth(
+        app_slug="repo-health",
+        app_id="123",
+        private_key_path=key_path,
+        api_base_url="https://api.example.test",
+    )
+
+    with pytest.raises(GithubApiError) as exc_info:
+        auth.get_installation("456")
+
+    payload = exc_info.value.to_dict()
+    assert payload["error"] == "github_api_error"
+    assert payload["github_path"] == "/app/installations/456"
+    assert "dns failed" in payload["message"]
 
 
 def test_create_installation_token_rejects_non_numeric_installation_id(tmp_path):

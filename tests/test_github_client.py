@@ -1,4 +1,5 @@
 import pytest
+import requests
 
 from app.errors import (
     GithubApiError,
@@ -53,6 +54,23 @@ def test_get_json_uses_20_second_timeout(requests_mock):
     client.get_json("/repos/a/repo")
 
     assert requests_mock.last_request.timeout == 20
+
+
+def test_get_json_maps_network_errors_to_github_api_error(requests_mock):
+    requests_mock.get(
+        "https://api.github.com/repos/a/repo",
+        exc=requests.ConnectTimeout("connect timed out"),
+    )
+    client = GithubClient()
+
+    with pytest.raises(GithubApiError) as exc_info:
+        client.get_json("/repos/a/repo")
+
+    payload = exc_info.value.to_dict()
+    assert payload["error"] == "github_api_error"
+    assert payload["github_path"] == "/repos/a/repo"
+    assert "GitHub API request failed" in payload["message"]
+    assert "connect timed out" in payload["message"]
 
 
 def test_get_json_returns_status_payload_for_202_no_content(requests_mock):

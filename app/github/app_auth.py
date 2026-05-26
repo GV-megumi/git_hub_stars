@@ -59,23 +59,29 @@ class GithubAppAuth:
         )
         body["permissions"] = _read_only_permissions(requested_permissions)
 
-        response = requests.post(
-            f"{self.api_base_url}{path}",
-            json=body,
-            headers=self._headers(),
-            timeout=20,
-        )
+        try:
+            response = requests.post(
+                f"{self.api_base_url}{path}",
+                json=body,
+                headers=self._headers(),
+                timeout=20,
+            )
+        except requests.RequestException as exc:
+            raise _network_error(path, exc) from exc
         _raise_for_github_error(response, path)
         return response.json()
 
     def get_installation(self, installation_id: str | int) -> dict[str, Any]:
         installation_id = _installation_id(installation_id)
         path = f"/app/installations/{installation_id}"
-        response = requests.get(
-            f"{self.api_base_url}{path}",
-            headers=self._headers(),
-            timeout=20,
-        )
+        try:
+            response = requests.get(
+                f"{self.api_base_url}{path}",
+                headers=self._headers(),
+                timeout=20,
+            )
+        except requests.RequestException as exc:
+            raise _network_error(path, exc) from exc
         _raise_for_github_error(response, path)
         return _installation_state(response.json())
 
@@ -186,6 +192,13 @@ def _raise_for_github_error(response: requests.Response, path: str) -> None:
     if response.status_code == 422:
         raise ValidationError(message, **kwargs)
     raise GithubApiError(message, **kwargs)
+
+
+def _network_error(path: str, exc: requests.RequestException) -> GithubApiError:
+    return GithubApiError(
+        f"GitHub App API request failed: {exc}.",
+        github_path=path,
+    )
 
 
 def _error_message(status_code: int, github_message: str | None) -> str:

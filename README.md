@@ -80,6 +80,8 @@ MODEL_API_KEY=replace-with-model-api-key
 MODEL_NAME=gpt-4.1-mini
 ```
 
+启用 GitHub App 时必须设置非默认 `FLASK_SECRET_KEY`，因为本地 session 会保存 installation 授权状态标识。
+
 ## GitHub App
 
 私有仓库访问使用 GitHub App installation authorization，不使用 OAuth App、个人访问令牌或 `.env` 中的静态 Github token。

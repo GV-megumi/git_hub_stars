@@ -6,6 +6,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+DEFAULT_FLASK_SECRET_KEY = "dev-only-change-me"
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -27,7 +29,7 @@ class Settings:
         private_key_path = _env("GITHUB_APP_PRIVATE_KEY_PATH")
         return cls(
             flask_env=_env("FLASK_ENV") or "development",
-            flask_secret_key=_env("FLASK_SECRET_KEY") or "dev-only-change-me",
+            flask_secret_key=_env("FLASK_SECRET_KEY") or DEFAULT_FLASK_SECRET_KEY,
             github_app_id=_env("GITHUB_APP_ID"),
             github_app_slug=_env("GITHUB_APP_SLUG"),
             github_app_private_key_path=Path(private_key_path) if private_key_path else None,
