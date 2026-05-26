@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from types import SimpleNamespace
 
@@ -282,16 +283,26 @@ def test_run_agent_analysis_uses_github_tools_tavily_and_parses_llm_json():
     assert result["attempted_tools"] == [
         "github.get_repo_summary",
         "github.get_language_breakdown",
+        "github.get_community_profile",
+        "github.get_recent_commits",
+        "github.get_issues_summary",
+        "github.get_pulls_summary",
         "github.get_releases",
         "github.get_actions_runs_summary",
+        "github.get_readme_and_key_files",
         "tavily.search",
         "tavily.extract",
     ]
     assert result["used_tools"] == [
         "github.get_repo_summary",
         "github.get_language_breakdown",
+        "github.get_community_profile",
+        "github.get_recent_commits",
+        "github.get_issues_summary",
+        "github.get_pulls_summary",
         "github.get_releases",
         "github.get_actions_runs_summary",
+        "github.get_readme_and_key_files",
         "tavily.search",
         "tavily.extract",
     ]
@@ -310,8 +321,16 @@ def test_run_agent_analysis_uses_github_tools_tavily_and_parses_llm_json():
     assert github_client.calls == [
         ("/repos/owner/repo", None),
         ("/repos/owner/repo/languages", None),
+        ("/repos/owner/repo/community/profile", None),
+        ("/repos/owner/repo/commits", {"per_page": 30}),
+        ("/repos/owner/repo/issues", {"state": "open", "per_page": 30}),
+        ("/repos/owner/repo/pulls", {"state": "open", "per_page": 30}),
         ("/repos/owner/repo/releases", {"per_page": 10}),
         ("/repos/owner/repo/actions/runs", {"per_page": 20}),
+        ("/repos/owner/repo/readme", None),
+        ("/repos/owner/repo/contents/CONTRIBUTING.md", None),
+        ("/repos/owner/repo/contents/SECURITY.md", None),
+        ("/repos/owner/repo/contents/CODE_OF_CONDUCT.md", None),
     ]
 
 
@@ -375,7 +394,12 @@ def test_run_agent_analysis_private_mode_collects_enhanced_github_tools():
         permissions={
             "actions": "read",
             "administration": "read",
+            "checks": "read",
             "contents": "read",
+            "deployments": "read",
+            "issues": "read",
+            "pull_requests": "read",
+            "repository_advisories": "read",
             "vulnerability_alerts": "read",
             "security_events": "read",
             "secret_scanning_alerts": "read",
@@ -386,27 +410,48 @@ def test_run_agent_analysis_private_mode_collects_enhanced_github_tools():
     assert result["attempted_tools"] == [
         "github.get_repo_summary",
         "github.get_language_breakdown",
+        "github.get_community_profile",
+        "github.get_recent_commits",
+        "github.get_issues_summary",
+        "github.get_pulls_summary",
         "github.get_releases",
         "github.get_actions_runs_summary",
+        "github.get_readme_and_key_files",
         "github.get_traffic_summary",
         "github.get_sbom_summary",
         "github.get_dependabot_alerts_summary",
         "github.get_code_scanning_alerts_summary",
         "github.get_secret_scanning_alerts_summary",
+        "github.get_checks_summary",
+        "github.get_repository_rules_summary",
+        "github.get_security_advisories_summary",
+        "github.get_deployments_summary",
     ]
     assert "github.get_traffic_summary" in result["used_tools"]
     assert "github.get_sbom_summary" in result["used_tools"]
     assert "github.get_dependabot_alerts_summary" in result["used_tools"]
     assert "github.get_code_scanning_alerts_summary" in result["used_tools"]
     assert "github.get_secret_scanning_alerts_summary" in result["used_tools"]
+    assert "github.get_checks_summary" in result["used_tools"]
+    assert "github.get_repository_rules_summary" in result["used_tools"]
+    assert "github.get_security_advisories_summary" in result["used_tools"]
+    assert "github.get_deployments_summary" in result["used_tools"]
     assert "traffic" in llm.prompts[0]
     assert "dependabot" in llm.prompts[0]
     assert "secret_scanning" in llm.prompts[0]
     assert github_client.calls == [
         ("/repos/owner/private-repo", None),
         ("/repos/owner/private-repo/languages", None),
+        ("/repos/owner/private-repo/community/profile", None),
+        ("/repos/owner/private-repo/commits", {"per_page": 30}),
+        ("/repos/owner/private-repo/issues", {"state": "open", "per_page": 30}),
+        ("/repos/owner/private-repo/pulls", {"state": "open", "per_page": 30}),
         ("/repos/owner/private-repo/releases", {"per_page": 10}),
         ("/repos/owner/private-repo/actions/runs", {"per_page": 20}),
+        ("/repos/owner/private-repo/readme", None),
+        ("/repos/owner/private-repo/contents/CONTRIBUTING.md", None),
+        ("/repos/owner/private-repo/contents/SECURITY.md", None),
+        ("/repos/owner/private-repo/contents/CODE_OF_CONDUCT.md", None),
         ("/repos/owner/private-repo/traffic/views", None),
         ("/repos/owner/private-repo/traffic/clones", None),
         ("/repos/owner/private-repo/traffic/popular/referrers", None),
@@ -415,6 +460,11 @@ def test_run_agent_analysis_private_mode_collects_enhanced_github_tools():
         ("/repos/owner/private-repo/dependabot/alerts", {"per_page": 100}),
         ("/repos/owner/private-repo/code-scanning/alerts", {"per_page": 100}),
         ("/repos/owner/private-repo/secret-scanning/alerts", {"per_page": 100}),
+        ("/repos/owner/private-repo", None),
+        ("/repos/owner/private-repo/commits/main/check-runs", {"per_page": 50}),
+        ("/repos/owner/private-repo/rulesets", {"per_page": 30}),
+        ("/repos/owner/private-repo/security-advisories", {"per_page": 50}),
+        ("/repos/owner/private-repo/deployments", {"per_page": 30}),
     ]
 
 
@@ -448,15 +498,29 @@ def test_run_agent_analysis_private_mode_attempts_unavailable_tools_without_mark
     assert "github.get_dependabot_alerts_summary" in result["attempted_tools"]
     assert "github.get_code_scanning_alerts_summary" in result["attempted_tools"]
     assert "github.get_secret_scanning_alerts_summary" in result["attempted_tools"]
+    assert "github.get_checks_summary" in result["attempted_tools"]
+    assert "github.get_repository_rules_summary" in result["attempted_tools"]
+    assert "github.get_security_advisories_summary" in result["attempted_tools"]
+    assert "github.get_deployments_summary" in result["attempted_tools"]
     assert "github.get_traffic_summary" not in result["used_tools"]
     assert "github.get_dependabot_alerts_summary" not in result["used_tools"]
     assert "github.get_code_scanning_alerts_summary" not in result["used_tools"]
     assert "github.get_secret_scanning_alerts_summary" not in result["used_tools"]
+    assert "github.get_checks_summary" not in result["used_tools"]
+    assert "github.get_repository_rules_summary" not in result["used_tools"]
+    assert "github.get_security_advisories_summary" not in result["used_tools"]
+    assert "github.get_deployments_summary" not in result["used_tools"]
     assert "missing_permission" in llm.prompts[0]
     assert github_client.calls == [
         ("/repos/owner/private-repo", None),
         ("/repos/owner/private-repo/languages", None),
+        ("/repos/owner/private-repo/community/profile", None),
+        ("/repos/owner/private-repo/commits", {"per_page": 30}),
         ("/repos/owner/private-repo/releases", {"per_page": 10}),
+        ("/repos/owner/private-repo/readme", None),
+        ("/repos/owner/private-repo/contents/CONTRIBUTING.md", None),
+        ("/repos/owner/private-repo/contents/SECURITY.md", None),
+        ("/repos/owner/private-repo/contents/CODE_OF_CONDUCT.md", None),
         ("/repos/owner/private-repo/dependency-graph/sbom/generate-report", None),
     ]
 
@@ -564,6 +628,10 @@ class FakeGithubClient:
     def get_json(self, path, params=None):
         self.calls.append((path, params))
         base = f"/repos/owner/{self.repo_name}"
+        readme_text = "# Repo\nDocs"
+        contributing_text = "Contributing"
+        security_text = "Security policy"
+        conduct_text = "Code of conduct"
         fixtures = {
             base: {
                 "full_name": f"owner/{self.repo_name}",
@@ -576,6 +644,51 @@ class FakeGithubClient:
                 "license": {"spdx_id": "MIT"},
             },
             f"{base}/languages": {"Python": 900, "HTML": 100},
+            f"{base}/community/profile": {
+                "health_percentage": 90,
+                "files": {
+                    "readme": {"name": "README.md"},
+                    "license": {"name": "LICENSE"},
+                    "contributing": {"name": "CONTRIBUTING.md"},
+                    "code_of_conduct": {"name": "CODE_OF_CONDUCT.md"},
+                    "issue_template": None,
+                    "pull_request_template": None,
+                    "security": {"name": "SECURITY.md"},
+                },
+            },
+            f"{base}/commits": [
+                {
+                    "sha": "abc123456789",
+                    "author": {"login": "octocat"},
+                    "commit": {
+                        "message": "Initial commit\n\nbody",
+                        "author": {"name": "Octocat", "date": "2026-05-01T00:00:00Z"},
+                    },
+                    "html_url": f"https://github.com/owner/{self.repo_name}/commit/abc123456789",
+                }
+            ],
+            f"{base}/issues": [
+                {
+                    "number": 1,
+                    "title": "Issue",
+                    "state": "open",
+                    "created_at": "2026-05-02T00:00:00Z",
+                    "updated_at": "2026-05-03T00:00:00Z",
+                    "labels": [{"name": "bug"}],
+                    "html_url": f"https://github.com/owner/{self.repo_name}/issues/1",
+                }
+            ],
+            f"{base}/pulls": [
+                {
+                    "number": 2,
+                    "title": "PR",
+                    "state": "open",
+                    "draft": False,
+                    "created_at": "2026-05-04T00:00:00Z",
+                    "updated_at": "2026-05-05T00:00:00Z",
+                    "html_url": f"https://github.com/owner/{self.repo_name}/pull/2",
+                }
+            ],
             f"{base}/releases": [
                 {
                     "tag_name": "v1.0.0",
@@ -586,6 +699,38 @@ class FakeGithubClient:
                     "html_url": f"https://github.com/owner/{self.repo_name}/releases/tag/v1.0.0",
                 }
             ],
+            f"{base}/readme": {
+                "name": "README.md",
+                "path": "README.md",
+                "size": len(readme_text),
+                "encoding": "base64",
+                "content": base64.b64encode(readme_text.encode()).decode(),
+                "html_url": f"https://github.com/owner/{self.repo_name}/blob/main/README.md",
+            },
+            f"{base}/contents/CONTRIBUTING.md": {
+                "name": "CONTRIBUTING.md",
+                "path": "CONTRIBUTING.md",
+                "size": len(contributing_text),
+                "encoding": "base64",
+                "content": base64.b64encode(contributing_text.encode()).decode(),
+                "html_url": f"https://github.com/owner/{self.repo_name}/blob/main/CONTRIBUTING.md",
+            },
+            f"{base}/contents/SECURITY.md": {
+                "name": "SECURITY.md",
+                "path": "SECURITY.md",
+                "size": len(security_text),
+                "encoding": "base64",
+                "content": base64.b64encode(security_text.encode()).decode(),
+                "html_url": f"https://github.com/owner/{self.repo_name}/blob/main/SECURITY.md",
+            },
+            f"{base}/contents/CODE_OF_CONDUCT.md": {
+                "name": "CODE_OF_CONDUCT.md",
+                "path": "CODE_OF_CONDUCT.md",
+                "size": len(conduct_text),
+                "encoding": "base64",
+                "content": base64.b64encode(conduct_text.encode()).decode(),
+                "html_url": f"https://github.com/owner/{self.repo_name}/blob/main/CODE_OF_CONDUCT.md",
+            },
             f"{base}/actions/runs": {
                 "total_count": 1,
                 "workflow_runs": [
@@ -637,6 +782,57 @@ class FakeGithubClient:
                     "state": "open",
                     "secret_type": "github_personal_access_token",
                     "secret": "drop-secret",
+                }
+            ],
+            f"{base}/commits/main/check-runs": {
+                "total_count": 1,
+                "check_runs": [
+                    {
+                        "id": 4,
+                        "name": "CI",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "started_at": "2026-05-01T00:00:00Z",
+                        "completed_at": "2026-05-01T00:01:00Z",
+                        "html_url": f"https://github.com/owner/{self.repo_name}/runs/4",
+                        "output": {"summary": "drop"},
+                    }
+                ],
+            },
+            f"{base}/rulesets": [
+                {
+                    "id": 1,
+                    "name": "main protection",
+                    "target": "branch",
+                    "enforcement": "active",
+                    "source_type": "Repository",
+                    "rules": [{"type": "required_status_checks"}],
+                }
+            ],
+            f"{base}/security-advisories": [
+                {
+                    "ghsa_id": "GHSA-abcd-1234-efgh",
+                    "cve_id": "CVE-2026-0001",
+                    "state": "published",
+                    "severity": "high",
+                    "description": "drop",
+                    "published_at": "2026-05-01T00:00:00Z",
+                    "updated_at": "2026-05-02T00:00:00Z",
+                    "html_url": f"https://github.com/owner/{self.repo_name}/security/advisories/GHSA-abcd-1234-efgh",
+                }
+            ],
+            f"{base}/deployments": [
+                {
+                    "id": 9,
+                    "environment": "production",
+                    "ref": "main",
+                    "sha": "abc123456789",
+                    "task": "deploy",
+                    "created_at": "2026-05-01T00:00:00Z",
+                    "updated_at": "2026-05-01T00:02:00Z",
+                    "transient_environment": False,
+                    "production_environment": True,
+                    "payload": {"drop": True},
                 }
             ],
         }

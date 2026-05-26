@@ -84,27 +84,36 @@ MODEL_NAME=gpt-4.1-mini
 
 私有仓库访问使用 GitHub App installation authorization，不使用 OAuth App、个人访问令牌或 `.env` 中的静态 Github token。
 
-基础只读权限：
+系统体检基础只读权限：
 
 - Metadata: read
 - Contents: read
-- Issues: read
 - Pull requests: read
-- Commit statuses: read
 
-增强只读权限：
+AI agent 增强只读权限：
 
+- Issues: read
 - Actions: read
+- Checks: read
+- Deployments: read
 - Code scanning alerts: read
 - Dependabot alerts: read
+- Repository security advisories: read
 - Secret scanning alerts: read
 - Administration: read
 
 对应 installation token 权限字段：
 
+- `metadata`: read
+- `contents`: read
+- `pull_requests`: read
+- `issues`: read
 - `actions`: read
+- `checks`: read
+- `deployments`: read
 - `security_events`: read，用于 code scanning alerts
 - `vulnerability_alerts`: read，用于 Dependabot alerts
+- `repository_advisories`: read，用于 repository security advisories
 - `secret_scanning_alerts`: read
 - `administration`: read
 

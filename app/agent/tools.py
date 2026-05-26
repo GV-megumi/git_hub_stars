@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import math
 from typing import Any
 from urllib.parse import urlparse
@@ -35,6 +36,72 @@ _ACTIONS_RUN_FIELDS = (
     "html_url",
 )
 
+_COMMUNITY_FILE_KEYS = (
+    "readme",
+    "license",
+    "contributing",
+    "code_of_conduct",
+    "issue_template",
+    "pull_request_template",
+    "security",
+)
+
+_CHECK_RUN_FIELDS = (
+    "id",
+    "name",
+    "status",
+    "conclusion",
+    "started_at",
+    "completed_at",
+    "html_url",
+)
+
+_RULESET_FIELDS = (
+    "id",
+    "name",
+    "target",
+    "enforcement",
+    "source_type",
+)
+
+_SECURITY_ADVISORY_FIELDS = (
+    "ghsa_id",
+    "cve_id",
+    "state",
+    "severity",
+    "published_at",
+    "updated_at",
+    "html_url",
+)
+
+_DEPLOYMENT_FIELDS = (
+    "id",
+    "environment",
+    "ref",
+    "sha",
+    "task",
+    "created_at",
+    "updated_at",
+    "transient_environment",
+    "production_environment",
+)
+
+_KEY_FILES = (
+    ("readme", "README.md", None),
+    ("contributing", "CONTRIBUTING.md", "CONTRIBUTING.md"),
+    ("security", "SECURITY.md", "SECURITY.md"),
+    ("code_of_conduct", "CODE_OF_CONDUCT.md", "CODE_OF_CONDUCT.md"),
+)
+
+_MAX_RECENT_COMMITS = 30
+_MAX_RECENT_ISSUES = 30
+_MAX_RECENT_PULLS = 30
+_MAX_CHECK_RUNS = 50
+_MAX_RULESETS = 30
+_MAX_SECURITY_ADVISORIES = 50
+_MAX_DEPLOYMENTS = 30
+_MAX_FILE_TEXT_CHARS = 1200
+_MAX_FILE_SIZE_TO_DECODE = 120_000
 _MAX_SBOM_PACKAGES = 20
 _MAX_ALERT_SUMMARIES = 10
 _MAX_TRAFFIC_TOP_ITEMS = 10
@@ -97,6 +164,77 @@ class GithubAgentTools:
         ]
         return {"total_bytes": total_bytes, "languages": languages}
 
+    def get_community_profile(self) -> dict[str, Any]:
+        try:
+            data = self.client.get_json(f"{self.base}/community/profile")
+        except PermissionRequiredError:
+            return self._unavailable("metadata:read")
+        except NotFoundError:
+            return {"available": False, "reason": "not_found"}
+
+        if not isinstance(data, dict):
+            return self._malformed_community_profile()
+
+        return {
+            "available": True,
+            "health_percentage": data.get("health_percentage"),
+            "files": self._community_file_booleans(data.get("files")),
+        }
+
+    def get_recent_commits(self) -> dict[str, Any]:
+        if self.private_mode and not self._has("contents", "read"):
+            return self._unavailable("contents:read")
+
+        commits = self.client.get_json(f"{self.base}/commits", params={"per_page": _MAX_RECENT_COMMITS})
+        if not isinstance(commits, list):
+            return self._malformed_recent_commits()
+
+        items = [self._commit_summary(commit) for commit in commits if isinstance(commit, dict)]
+        return {"available": True, "count": len(items), "items": items}
+
+    def get_issues_summary(self) -> dict[str, Any]:
+        if self.private_mode and not self._has("issues", "read"):
+            return self._unavailable("issues:read")
+
+        issues = self.client.get_json(
+            f"{self.base}/issues",
+            params={"state": "open", "per_page": _MAX_RECENT_ISSUES},
+        )
+        if not isinstance(issues, list):
+            return self._malformed_issues()
+
+        issue_items = [
+            issue
+            for issue in issues
+            if isinstance(issue, dict) and not isinstance(issue.get("pull_request"), dict)
+        ]
+        summaries = [self._issue_summary(issue) for issue in issue_items]
+        return {
+            "available": True,
+            "open_count": len(summaries),
+            "label_counts": self._label_counts(summaries),
+            "recent_issues": summaries,
+        }
+
+    def get_pulls_summary(self) -> dict[str, Any]:
+        if self.private_mode and not self._has("pull_requests", "read"):
+            return self._unavailable("pull_requests:read")
+
+        pulls = self.client.get_json(
+            f"{self.base}/pulls",
+            params={"state": "open", "per_page": _MAX_RECENT_PULLS},
+        )
+        if not isinstance(pulls, list):
+            return self._malformed_pulls()
+
+        summaries = [self._pull_summary(pull) for pull in pulls if isinstance(pull, dict)]
+        return {
+            "available": True,
+            "open_count": len(summaries),
+            "draft_count": sum(1 for pull in summaries if pull.get("draft") is True),
+            "recent_pulls": summaries,
+        }
+
     def get_releases(self) -> dict[str, Any]:
         releases = self.client.get_json(f"{self.base}/releases", params={"per_page": 10})
         if not isinstance(releases, list):
@@ -106,7 +244,7 @@ class GithubAgentTools:
         return {"available": True, "count": len(items), "items": items}
 
     def get_actions_runs_summary(self) -> dict[str, Any]:
-        if not self._has("actions", "read"):
+        if self.private_mode and not self._has("actions", "read"):
             return self._unavailable("actions:read")
 
         try:
@@ -138,6 +276,28 @@ class GithubAgentTools:
             "status_counts": self._counts(recent_runs, "status"),
             "recent_runs": recent_runs,
         }
+
+    def get_readme_and_key_files(self) -> dict[str, Any]:
+        if self.private_mode and not self._has("contents", "read"):
+            return self._unavailable("contents:read")
+
+        files: list[dict[str, Any]] = []
+        for key, display_path, content_path in _KEY_FILES:
+            endpoint = f"{self.base}/readme" if content_path is None else f"{self.base}/contents/{content_path}"
+            try:
+                data = self.client.get_json(endpoint)
+            except PermissionRequiredError:
+                return self._unavailable("contents:read")
+            except NotFoundError:
+                files.append({"key": key, "available": False, "reason": "not_found", "path": display_path})
+                continue
+
+            if not isinstance(data, dict):
+                files.append({"key": key, "available": False, "error": "malformed_response", "path": display_path})
+                continue
+            files.append(self._key_file_summary(key, data))
+
+        return {"available": True, "files": files}
 
     def get_traffic_summary(self) -> dict[str, Any]:
         permission = "administration:read"
@@ -315,6 +475,122 @@ class GithubAgentTools:
             ],
         }
 
+    def get_checks_summary(self) -> dict[str, Any]:
+        permission = "checks:read"
+        if not self._has("checks", "read"):
+            return self._unavailable(permission)
+
+        try:
+            default_branch = self._default_branch()
+        except PermissionRequiredError:
+            return self._unavailable(permission)
+        except NotFoundError:
+            return {"available": False, "reason": "not_found"}
+        if not default_branch:
+            return self._malformed_checks()
+
+        ok, runs = self._get_json_or_unavailable(
+            f"{self.base}/commits/{default_branch}/check-runs",
+            permission,
+            params={"per_page": _MAX_CHECK_RUNS},
+        )
+        if not ok:
+            return runs
+        if not isinstance(runs, dict):
+            return self._malformed_checks()
+
+        check_runs = runs.get("check_runs", [])
+        if not isinstance(check_runs, list):
+            check_runs = []
+        recent_runs = [
+            self._select_fields(check_run, _CHECK_RUN_FIELDS)
+            for check_run in check_runs
+            if isinstance(check_run, dict)
+        ]
+        total_count = runs.get("total_count")
+        if not isinstance(total_count, int) or isinstance(total_count, bool):
+            total_count = len(recent_runs)
+        return {
+            "available": True,
+            "total_count": total_count,
+            "status_counts": self._counts(recent_runs, "status"),
+            "conclusion_counts": self._counts(recent_runs, "conclusion"),
+            "recent_runs": recent_runs,
+        }
+
+    def get_repository_rules_summary(self) -> dict[str, Any]:
+        permission = "administration:read"
+        if not self._has("administration", "read"):
+            return self._unavailable(permission)
+
+        ok, rulesets = self._get_json_or_unavailable(
+            f"{self.base}/rulesets",
+            permission,
+            params={"per_page": _MAX_RULESETS},
+        )
+        if not ok:
+            return rulesets
+        if not isinstance(rulesets, list):
+            return self._malformed_rulesets()
+
+        items = [self._select_fields(ruleset, _RULESET_FIELDS) for ruleset in rulesets if isinstance(ruleset, dict)]
+        return {"available": True, "count": len(items), "items": items}
+
+    def get_security_advisories_summary(self) -> dict[str, Any]:
+        permission = "repository_advisories:read"
+        if not self._has("repository_advisories", "read"):
+            return self._unavailable(permission)
+
+        ok, advisories = self._get_json_or_unavailable(
+            f"{self.base}/security-advisories",
+            permission,
+            params={"per_page": _MAX_SECURITY_ADVISORIES},
+        )
+        if not ok:
+            return advisories
+        if not isinstance(advisories, list):
+            return self._malformed_security_advisories()
+
+        items = [
+            self._select_fields(advisory, _SECURITY_ADVISORY_FIELDS)
+            for advisory in advisories
+            if isinstance(advisory, dict)
+        ]
+        return {
+            "available": True,
+            "count": len(items),
+            "state_counts": self._counts(items, "state"),
+            "severity_counts": self._counts(items, "severity"),
+            "items": items,
+        }
+
+    def get_deployments_summary(self) -> dict[str, Any]:
+        permission = "deployments:read"
+        if not self._has("deployments", "read"):
+            return self._unavailable(permission)
+
+        ok, deployments = self._get_json_or_unavailable(
+            f"{self.base}/deployments",
+            permission,
+            params={"per_page": _MAX_DEPLOYMENTS},
+        )
+        if not ok:
+            return deployments
+        if not isinstance(deployments, list):
+            return self._malformed_deployments()
+
+        items = [
+            self._select_fields(deployment, _DEPLOYMENT_FIELDS)
+            for deployment in deployments
+            if isinstance(deployment, dict)
+        ]
+        return {
+            "available": True,
+            "count": len(items),
+            "environment_counts": self._counts(items, "environment"),
+            "recent_deployments": items,
+        }
+
     def _has(self, permission: str, level: str) -> bool:
         granted = self.permissions.get(permission)
         granted_rank = _PERMISSION_LEVELS.get(granted or "")
@@ -340,6 +616,34 @@ class GithubAgentTools:
             "conclusion_counts": {},
             "status_counts": {},
             "recent_runs": [],
+        }
+
+    @staticmethod
+    def _malformed_community_profile() -> dict[str, Any]:
+        return {"available": False, "error": "malformed_response", "health_percentage": None, "files": {}}
+
+    @staticmethod
+    def _malformed_recent_commits() -> dict[str, Any]:
+        return {"available": False, "error": "malformed_response", "count": 0, "items": []}
+
+    @staticmethod
+    def _malformed_issues() -> dict[str, Any]:
+        return {
+            "available": False,
+            "error": "malformed_response",
+            "open_count": 0,
+            "label_counts": {},
+            "recent_issues": [],
+        }
+
+    @staticmethod
+    def _malformed_pulls() -> dict[str, Any]:
+        return {
+            "available": False,
+            "error": "malformed_response",
+            "open_count": 0,
+            "draft_count": 0,
+            "recent_pulls": [],
         }
 
     @staticmethod
@@ -405,6 +709,42 @@ class GithubAgentTools:
             "alerts": [],
         }
 
+    @staticmethod
+    def _malformed_checks() -> dict[str, Any]:
+        return {
+            "available": False,
+            "error": "malformed_response",
+            "total_count": 0,
+            "status_counts": {},
+            "conclusion_counts": {},
+            "recent_runs": [],
+        }
+
+    @staticmethod
+    def _malformed_rulesets() -> dict[str, Any]:
+        return {"available": False, "error": "malformed_response", "count": 0, "items": []}
+
+    @staticmethod
+    def _malformed_security_advisories() -> dict[str, Any]:
+        return {
+            "available": False,
+            "error": "malformed_response",
+            "count": 0,
+            "state_counts": {},
+            "severity_counts": {},
+            "items": [],
+        }
+
+    @staticmethod
+    def _malformed_deployments() -> dict[str, Any]:
+        return {
+            "available": False,
+            "error": "malformed_response",
+            "count": 0,
+            "environment_counts": {},
+            "recent_deployments": [],
+        }
+
     def _get_json_or_unavailable(
         self,
         path: str,
@@ -421,6 +761,144 @@ class GithubAgentTools:
     @staticmethod
     def _select_fields(data: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
         return {field: data.get(field) for field in fields}
+
+    @staticmethod
+    def _community_file_booleans(files: Any) -> dict[str, bool]:
+        if not isinstance(files, dict):
+            return {key: False for key in _COMMUNITY_FILE_KEYS}
+        return {key: bool(files.get(key)) for key in _COMMUNITY_FILE_KEYS}
+
+    @staticmethod
+    def _commit_summary(commit: dict[str, Any]) -> dict[str, Any]:
+        commit_data = commit.get("commit")
+        if not isinstance(commit_data, dict):
+            commit_data = {}
+        author_data = commit.get("author")
+        commit_author = commit_data.get("author")
+        if not isinstance(commit_author, dict):
+            commit_author = {}
+        if isinstance(author_data, dict) and isinstance(author_data.get("login"), str):
+            author = author_data.get("login")
+        else:
+            author = commit_author.get("name")
+        return {
+            "sha": GithubAgentTools._short_sha(commit.get("sha")),
+            "author": author,
+            "message": GithubAgentTools._first_line(commit_data.get("message"), limit=140),
+            "committed_at": commit_author.get("date"),
+            "html_url": commit.get("html_url"),
+        }
+
+    @staticmethod
+    def _issue_summary(issue: dict[str, Any]) -> dict[str, Any]:
+        labels = GithubAgentTools._label_names(issue.get("labels"))
+        return {
+            "number": issue.get("number"),
+            "title": issue.get("title"),
+            "state": issue.get("state"),
+            "created_at": issue.get("created_at"),
+            "updated_at": issue.get("updated_at"),
+            "labels": labels,
+            "html_url": issue.get("html_url"),
+        }
+
+    @staticmethod
+    def _pull_summary(pull: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "number": pull.get("number"),
+            "title": pull.get("title"),
+            "state": pull.get("state"),
+            "draft": pull.get("draft"),
+            "created_at": pull.get("created_at"),
+            "updated_at": pull.get("updated_at"),
+            "html_url": pull.get("html_url"),
+        }
+
+    @staticmethod
+    def _label_names(labels: Any) -> list[str]:
+        names: list[str] = []
+        if not isinstance(labels, list):
+            return names
+        for label in labels:
+            if not isinstance(label, dict):
+                continue
+            name = label.get("name")
+            if isinstance(name, str) and name:
+                names.append(name)
+        return names
+
+    @staticmethod
+    def _label_counts(items: list[dict[str, Any]]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for item in items:
+            labels = item.get("labels")
+            if not isinstance(labels, list):
+                continue
+            for label in labels:
+                if isinstance(label, str) and label:
+                    counts[label] = counts.get(label, 0) + 1
+        return counts
+
+    @staticmethod
+    def _short_sha(value: Any) -> Any:
+        if isinstance(value, str):
+            return value[:7]
+        return value
+
+    @staticmethod
+    def _first_line(value: Any, limit: int) -> Any:
+        if not isinstance(value, str):
+            return value
+        first_line = value.splitlines()[0] if value.splitlines() else ""
+        return first_line[:limit]
+
+    def _key_file_summary(self, key: str, data: dict[str, Any]) -> dict[str, Any]:
+        text_excerpt = self._decode_key_file_excerpt(data)
+        text_length = len(text_excerpt) if isinstance(text_excerpt, str) else 0
+        original_text_length = self._decoded_key_file_text_length(data)
+        return {
+            "key": key,
+            "available": True,
+            "name": data.get("name"),
+            "path": data.get("path"),
+            "size": self._safe_int(data.get("size")),
+            "html_url": data.get("html_url"),
+            "text_excerpt": text_excerpt,
+            "text_truncated": original_text_length > text_length,
+        }
+
+    @staticmethod
+    def _decode_key_file_excerpt(data: dict[str, Any]) -> str | None:
+        text = GithubAgentTools._decode_key_file_text(data)
+        if text is None:
+            return None
+        return text[:_MAX_FILE_TEXT_CHARS]
+
+    @staticmethod
+    def _decoded_key_file_text_length(data: dict[str, Any]) -> int:
+        text = GithubAgentTools._decode_key_file_text(data)
+        return len(text) if isinstance(text, str) else 0
+
+    @staticmethod
+    def _decode_key_file_text(data: dict[str, Any]) -> str | None:
+        size = data.get("size")
+        if isinstance(size, bool) or not isinstance(size, int) or size > _MAX_FILE_SIZE_TO_DECODE:
+            return None
+        content = data.get("content")
+        if not isinstance(content, str) or data.get("encoding") != "base64":
+            return None
+        try:
+            raw = base64.b64decode("".join(content.split()), validate=True)
+        except (ValueError, TypeError):
+            return None
+        return raw.decode("utf-8", errors="replace")
+
+    def _default_branch(self) -> str | None:
+        data = self.client.get_json(self.base)
+        if not isinstance(data, dict):
+            return None
+        branch = data.get("default_branch")
+        return branch if isinstance(branch, str) and branch else None
 
     @staticmethod
     def _counts(items: list[dict[str, Any]], field: str) -> dict[str, int]:

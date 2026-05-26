@@ -20,6 +20,10 @@ class FakeClient:
         if path in self.errors:
             raise self.errors[path]
         fixtures = {
+            "/repos/owner/repo": {
+                "full_name": "owner/repo",
+                "default_branch": "main",
+            },
             "/repos/owner/repo/traffic/views": {
                 "count": 10,
                 "uniques": 5,
@@ -114,6 +118,94 @@ class FakeClient:
                     "html_url": "https://github.com/owner/repo/security/secret-scanning/2",
                 },
             ],
+            "/repos/owner/repo/commits/main/check-runs": {
+                "total_count": 2,
+                "check_runs": [
+                    {
+                        "id": 1,
+                        "name": "lint",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "started_at": "2026-05-01T00:00:00Z",
+                        "completed_at": "2026-05-01T00:01:00Z",
+                        "html_url": "https://github.com/owner/repo/runs/1",
+                        "output": {"summary": "drop private logs"},
+                    },
+                    {
+                        "id": 2,
+                        "name": "test",
+                        "status": "completed",
+                        "conclusion": "failure",
+                        "started_at": "2026-05-02T00:00:00Z",
+                        "completed_at": "2026-05-02T00:01:00Z",
+                        "html_url": "https://github.com/owner/repo/runs/2",
+                        "output": {"summary": "drop private logs"},
+                    },
+                ],
+            },
+            "/repos/owner/repo/rulesets": [
+                {
+                    "id": 1,
+                    "name": "main protection",
+                    "target": "branch",
+                    "enforcement": "active",
+                    "source_type": "Repository",
+                    "rules": [{"type": "required_status_checks"}],
+                    "conditions": {"ref_name": {"include": ["refs/heads/main"]}},
+                }
+            ],
+            "/repos/owner/repo/security-advisories": [
+                {
+                    "ghsa_id": "GHSA-abcd-1234-efgh",
+                    "cve_id": "CVE-2026-0001",
+                    "state": "published",
+                    "severity": "high",
+                    "summary": "short advisory",
+                    "description": "drop detailed advisory",
+                    "published_at": "2026-05-01T00:00:00Z",
+                    "updated_at": "2026-05-02T00:00:00Z",
+                    "html_url": "https://github.com/owner/repo/security/advisories/GHSA-abcd-1234-efgh",
+                    "vulnerabilities": [{"package": {"name": "private-package"}}],
+                    "credits": [{"login": "private-user"}],
+                },
+                {
+                    "ghsa_id": "GHSA-zzzz-9999-yyyy",
+                    "cve_id": None,
+                    "state": "draft",
+                    "severity": "medium",
+                    "summary": "draft advisory",
+                    "published_at": None,
+                    "updated_at": "2026-05-03T00:00:00Z",
+                    "html_url": "https://github.com/owner/repo/security/advisories/GHSA-zzzz-9999-yyyy",
+                },
+            ],
+            "/repos/owner/repo/deployments": [
+                {
+                    "id": 10,
+                    "environment": "production",
+                    "ref": "main",
+                    "sha": "abc123456789",
+                    "task": "deploy",
+                    "created_at": "2026-05-01T00:00:00Z",
+                    "updated_at": "2026-05-01T00:02:00Z",
+                    "transient_environment": False,
+                    "production_environment": True,
+                    "payload": {"secret": "drop"},
+                    "creator": {"login": "octocat"},
+                },
+                {
+                    "id": 11,
+                    "environment": "staging",
+                    "ref": "main",
+                    "sha": "def567890000",
+                    "task": "deploy",
+                    "created_at": "2026-05-02T00:00:00Z",
+                    "updated_at": "2026-05-02T00:02:00Z",
+                    "transient_environment": False,
+                    "production_environment": False,
+                    "payload": {"secret": "drop"},
+                },
+            ],
         }
         fixtures.update(self.fixtures)
         return fixtures[path]
@@ -138,6 +230,10 @@ def make_tools(permissions=None, fixtures=None, errors=None):
         ("get_dependabot_alerts_summary", "vulnerability_alerts:read"),
         ("get_code_scanning_alerts_summary", "security_events:read"),
         ("get_secret_scanning_alerts_summary", "secret_scanning_alerts:read"),
+        ("get_checks_summary", "checks:read"),
+        ("get_repository_rules_summary", "administration:read"),
+        ("get_security_advisories_summary", "repository_advisories:read"),
+        ("get_deployments_summary", "deployments:read"),
     ],
 )
 def test_private_tools_without_permission_return_unavailable_and_do_not_call_api(method_name, permission):
@@ -443,6 +539,143 @@ def test_secret_scanning_alerts_summary_counts_and_trims_alert_fields():
     }
     assert "secret" not in result["alerts"][0]
     assert client.calls == [("/repos/owner/repo/secret-scanning/alerts", {"per_page": 100})]
+
+
+def test_checks_summary_reads_default_branch_and_trims_check_run_output():
+    tools, client = make_tools(permissions={"checks": "read"})
+
+    result = tools.get_checks_summary()
+
+    assert result == {
+        "available": True,
+        "total_count": 2,
+        "status_counts": {"completed": 2},
+        "conclusion_counts": {"success": 1, "failure": 1},
+        "recent_runs": [
+            {
+                "id": 1,
+                "name": "lint",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-05-01T00:00:00Z",
+                "completed_at": "2026-05-01T00:01:00Z",
+                "html_url": "https://github.com/owner/repo/runs/1",
+            },
+            {
+                "id": 2,
+                "name": "test",
+                "status": "completed",
+                "conclusion": "failure",
+                "started_at": "2026-05-02T00:00:00Z",
+                "completed_at": "2026-05-02T00:01:00Z",
+                "html_url": "https://github.com/owner/repo/runs/2",
+            },
+        ],
+    }
+    assert "output" not in result["recent_runs"][0]
+    assert client.calls == [
+        ("/repos/owner/repo", None),
+        ("/repos/owner/repo/commits/main/check-runs", {"per_page": 50}),
+    ]
+
+
+def test_repository_rules_summary_requires_administration_read_and_drops_rule_details():
+    tools, client = make_tools(permissions={"administration": "read"})
+
+    result = tools.get_repository_rules_summary()
+
+    assert result == {
+        "available": True,
+        "count": 1,
+        "items": [
+            {
+                "id": 1,
+                "name": "main protection",
+                "target": "branch",
+                "enforcement": "active",
+                "source_type": "Repository",
+            }
+        ],
+    }
+    assert "rules" not in result["items"][0]
+    assert "conditions" not in result["items"][0]
+    assert client.calls == [("/repos/owner/repo/rulesets", {"per_page": 30})]
+
+
+def test_security_advisories_summary_counts_and_trims_private_advisory_details():
+    tools, client = make_tools(permissions={"repository_advisories": "read"})
+
+    result = tools.get_security_advisories_summary()
+
+    assert result == {
+        "available": True,
+        "count": 2,
+        "state_counts": {"published": 1, "draft": 1},
+        "severity_counts": {"high": 1, "medium": 1},
+        "items": [
+            {
+                "ghsa_id": "GHSA-abcd-1234-efgh",
+                "cve_id": "CVE-2026-0001",
+                "state": "published",
+                "severity": "high",
+                "published_at": "2026-05-01T00:00:00Z",
+                "updated_at": "2026-05-02T00:00:00Z",
+                "html_url": "https://github.com/owner/repo/security/advisories/GHSA-abcd-1234-efgh",
+            },
+            {
+                "ghsa_id": "GHSA-zzzz-9999-yyyy",
+                "cve_id": None,
+                "state": "draft",
+                "severity": "medium",
+                "published_at": None,
+                "updated_at": "2026-05-03T00:00:00Z",
+                "html_url": "https://github.com/owner/repo/security/advisories/GHSA-zzzz-9999-yyyy",
+            },
+        ],
+    }
+    assert "description" not in result["items"][0]
+    assert "vulnerabilities" not in result["items"][0]
+    assert "credits" not in result["items"][0]
+    assert client.calls == [("/repos/owner/repo/security-advisories", {"per_page": 50})]
+
+
+def test_deployments_summary_counts_environments_and_drops_payloads():
+    tools, client = make_tools(permissions={"deployments": "read"})
+
+    result = tools.get_deployments_summary()
+
+    assert result == {
+        "available": True,
+        "count": 2,
+        "environment_counts": {"production": 1, "staging": 1},
+        "recent_deployments": [
+            {
+                "id": 10,
+                "environment": "production",
+                "ref": "main",
+                "sha": "abc123456789",
+                "task": "deploy",
+                "created_at": "2026-05-01T00:00:00Z",
+                "updated_at": "2026-05-01T00:02:00Z",
+                "transient_environment": False,
+                "production_environment": True,
+            },
+            {
+                "id": 11,
+                "environment": "staging",
+                "ref": "main",
+                "sha": "def567890000",
+                "task": "deploy",
+                "created_at": "2026-05-02T00:00:00Z",
+                "updated_at": "2026-05-02T00:02:00Z",
+                "transient_environment": False,
+                "production_environment": False,
+            },
+        ],
+    }
+    assert "payload" not in result["recent_deployments"][0]
+    assert "creator" not in result["recent_deployments"][0]
+    assert client.calls == [("/repos/owner/repo/deployments", {"per_page": 30})]
 
 
 def test_traffic_permission_error_returns_unavailable():

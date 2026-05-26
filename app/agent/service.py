@@ -15,8 +15,13 @@ from app.github.url_parser import RepoRef
 _TOOL_CALLS = (
     ("github.get_repo_summary", "repo_summary", "get_repo_summary"),
     ("github.get_language_breakdown", "languages", "get_language_breakdown"),
+    ("github.get_community_profile", "community_profile", "get_community_profile"),
+    ("github.get_recent_commits", "recent_commits", "get_recent_commits"),
+    ("github.get_issues_summary", "issues", "get_issues_summary"),
+    ("github.get_pulls_summary", "pulls", "get_pulls_summary"),
     ("github.get_releases", "releases", "get_releases"),
     ("github.get_actions_runs_summary", "actions", "get_actions_runs_summary"),
+    ("github.get_readme_and_key_files", "key_files", "get_readme_and_key_files"),
 )
 
 _PRIVATE_TOOL_CALLS = (
@@ -25,6 +30,10 @@ _PRIVATE_TOOL_CALLS = (
     ("github.get_dependabot_alerts_summary", "dependabot", "get_dependabot_alerts_summary"),
     ("github.get_code_scanning_alerts_summary", "code_scanning", "get_code_scanning_alerts_summary"),
     ("github.get_secret_scanning_alerts_summary", "secret_scanning", "get_secret_scanning_alerts_summary"),
+    ("github.get_checks_summary", "checks", "get_checks_summary"),
+    ("github.get_repository_rules_summary", "repository_rules", "get_repository_rules_summary"),
+    ("github.get_security_advisories_summary", "security_advisories", "get_security_advisories_summary"),
+    ("github.get_deployments_summary", "deployments", "get_deployments_summary"),
 )
 
 

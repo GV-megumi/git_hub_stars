@@ -22,6 +22,10 @@ _PRIVATE_ANALYSIS_PERMISSIONS = {
 _PRIVATE_AGENT_OPTIONAL_PERMISSIONS = (
     "actions",
     "administration",
+    "checks",
+    "deployments",
+    "issues",
+    "repository_advisories",
     "vulnerability_alerts",
     "security_events",
     "secret_scanning_alerts",

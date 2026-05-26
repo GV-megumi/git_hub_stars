@@ -199,9 +199,13 @@ def test_private_agent_route_uses_installation_token_and_keeps_tavily_disabled(m
         session["github_installation_id"] = "789"
         session["github_installation_permissions"] = {
             "actions": "read",
+            "checks": "read",
             "metadata": "read",
+            "issues": "read",
+            "deployments": "read",
             "vulnerability_alerts": "read",
             "administration": "write",
+            "repository_advisories": "read",
             "security_events": "read",
             "secret_scanning_alerts": "none",
         }
@@ -230,7 +234,11 @@ def test_private_agent_route_uses_installation_token_and_keeps_tavily_disabled(m
                 "metadata": "read",
                 "pull_requests": "read",
                 "actions": "read",
+                "checks": "read",
                 "administration": "read",
+                "issues": "read",
+                "deployments": "read",
+                "repository_advisories": "read",
                 "vulnerability_alerts": "read",
                 "security_events": "read",
             },
@@ -239,9 +247,13 @@ def test_private_agent_route_uses_installation_token_and_keeps_tavily_disabled(m
     assert created_clients[0].token == "installation-token"
     assert service_calls[0]["permissions"] == {
         "actions": "read",
+        "checks": "read",
         "metadata": "read",
+        "issues": "read",
+        "deployments": "read",
         "vulnerability_alerts": "read",
         "administration": "write",
+        "repository_advisories": "read",
         "security_events": "read",
         "secret_scanning_alerts": "none",
     }
