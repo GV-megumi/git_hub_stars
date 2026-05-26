@@ -54,14 +54,14 @@ GitHub App 安装授权用于私有仓库分析。公开仓库必须支持无需
 - 使用 GitHub App，不使用 OAuth App，也不使用个人访问令牌。
 - 用户在 GitHub 安装页选择安装到个人账号或组织。
 - 用户可选择授权全部仓库或指定仓库。
-- GitHub App 权限采用最小权限原则，第一版只申请只读权限。
+- GitHub App 权限采用可配置的权限档位。默认档位只申请基础只读权限；私有仓库增强体检可启用更大的只读权限集合。
 - `.env` 保存 GitHub App 的 App ID、App slug、私钥路径、安装回调 URL 和 Flask 会话密钥。
 - 后端通过 App JWT 调用 GitHub API，为具体 installation 生成短期 installation access token。
 - 创建 installation access token 时，按需限制到当前仓库和当前接口所需权限，不能扩大到 GitHub App 未被授予的权限。
 - installation access token 默认只短期存在于服务端内存/session，不写入 `.env`、日志或长期存储。
 - 用户取消授权、安装被移除、安装未包含目标仓库、权限不足时给出明确提示。
 
-建议的 GitHub App 只读权限：
+建议的 GitHub App 基础只读权限：
 
 | 权限 | 级别 | 用途 |
 | --- | --- | --- |
@@ -71,7 +71,25 @@ GitHub App 安装授权用于私有仓库分析。公开仓库必须支持无需
 | Pull requests | Read-only | 读取 PR 统计和积压状态 |
 | Commit statuses | Read-only | 可选，用于后续扩展 CI/状态检查 |
 
-如果后续增加安全扫描、依赖分析或 CI 状态分析，再按功能单独增加只读权限，并在页面解释新增权限原因。
+私有仓库增强体检建议权限：
+
+| 权限 | 级别 | 用途 |
+| --- | --- | --- |
+| Actions | Read-only | 读取 workflow、workflow runs、失败率、最近 CI 状态 |
+| Checks | Read-only | 读取 check runs/check suites，判断 CI 覆盖和失败状态 |
+| Code scanning alerts | Read-only | 读取代码扫描告警数量、严重级别和状态 |
+| Dependabot alerts | Read-only | 读取依赖漏洞告警、严重级别、修复状态 |
+| Secret scanning alerts | Read-only | 读取密钥泄露告警摘要和状态 |
+| Repository security advisories | Read-only | 读取仓库安全公告和披露状态 |
+| Administration | Read-only | 读取仓库流量、部分仓库设置、保护规则相关信息 |
+| Deployments | Read-only | 读取部署记录和环境发布状态 |
+
+权限策略：
+
+- 页面要展示当前 GitHub App installation 已授予的权限，并标记哪些增强工具可用。
+- 如果某个增强权限未授予，对应工具返回 `unavailable`，不阻断其他分析。
+- 私有仓库增强权限仍然只读；第一版不申请写权限、不修改仓库、不创建 Issue/PR。
+- 对安全相关结果只返回摘要和计数，避免在 UI、日志或模型上下文中泄露完整 secret、漏洞细节或敏感文件内容。
 
 ### 4.3 扩展功能：AI Agent 分析
 
@@ -85,7 +103,7 @@ agent 需要具备：
 - 模型配置：从 `.env` 读取模型 `base_url`、`api_key` 和 `model`。
 - 行为：围绕该仓库主动查找 Github 页面、README、Release、Issue/PR 讨论、文档站、社区讨论等公开信息。
 - 输出：AI 评分、评分理由、关键发现、风险解释、改进建议、引用链接。
-- 私有仓库保护：私有仓库的 agent 分析默认不启用 Tavily，不把仓库私有内容发送给公开网页搜索/提取工具。是否把私有仓库基础检测信息和 Github API 摘要发送给模型，需要在页面上明确提示并由用户单独确认。
+- 私有仓库保护：私有仓库的 agent 分析默认不启用 Tavily，不把仓库私有内容发送给公开网页搜索/提取工具。私有仓库可启用更多 Github API 包装工具，但是否把私有仓库基础检测信息、代码/Issue/PR 摘要或安全告警摘要发送给模型，需要在页面上明确提示并由用户单独确认。
 
 建议提供给 agent 的 Github API 包装工具：
 
@@ -100,7 +118,22 @@ agent 需要具备：
 | `get_pulls_summary` | Pull Requests API | PR 积压、review/merge 活跃度 | 限制最近 N 条，摘要化评论 |
 | `get_readme_and_key_files` | Contents API | README、CONTRIBUTING、SECURITY、模板等关键文件内容 | 文件大小和路径白名单限制 |
 
-公开仓库 agent 可同时使用 Tavily 和上述 Github API 包装工具。Tavily 用于补充 Github 外部信息，如官方文档站、迁移公告、博客、社区讨论和包管理器页面；Github API 包装工具用于获取仓库内部事实。私有仓库 agent 默认只使用 Github API 包装工具。
+私有仓库增强 agent 工具：
+
+| 工具 | 数据来源 | 用途 | 所需权限 |
+| --- | --- | --- | --- |
+| `get_actions_runs_summary` | Actions API | CI 最近运行、失败率、耗时、失败 workflow 摘要 | Actions read |
+| `get_checks_summary` | Checks API / Commit Statuses API | 默认分支和近期 PR 的 check/check suite 状态 | Checks read / Commit statuses read |
+| `get_traffic_summary` | Traffic API | 近 14 天 views、clones、referrers、热门路径 | Administration read |
+| `get_repository_rules_summary` | Repository Rules / Branch Protection API | 默认分支保护、rulesets、强制 review/status check 情况 | Metadata read，部分信息需要 Administration read |
+| `get_sbom_summary` | Dependency Graph SBOM API | 依赖清单、生态分布、关键依赖规模 | Contents read |
+| `get_dependabot_alerts_summary` | Dependabot Alerts API | 依赖漏洞告警数量、严重级别、修复状态 | Dependabot alerts read |
+| `get_code_scanning_alerts_summary` | Code Scanning API | 代码扫描告警数量、严重级别、工具来源、状态 | Code scanning alerts read |
+| `get_secret_scanning_alerts_summary` | Secret Scanning API | secret scanning 告警数量、状态、类型摘要 | Secret scanning alerts read |
+| `get_security_advisories_summary` | Repository Security Advisories API | 仓库安全公告、CVE/GHSA 状态摘要 | Repository security advisories read |
+| `get_deployments_summary` | Deployments API | 部署频率、最近环境、失败/成功状态 | Deployments read |
+
+公开仓库 agent 可同时使用 Tavily 和基础 Github API 包装工具。Tavily 用于补充 Github 外部信息，如官方文档站、迁移公告、博客、社区讨论和包管理器页面；Github API 包装工具用于获取仓库内部事实。私有仓库 agent 默认不使用 Tavily，但在安装授权足够时可使用基础工具和私有增强工具。
 
 第一版可以先预留接口和页面入口；agent 实现可作为第二阶段开发。
 
@@ -265,6 +298,15 @@ AI 输出结构：
 - Release：`GET /repos/{owner}/{repo}/releases`
 - Issue/PR：`GET /repos/{owner}/{repo}/issues` 和 `GET /repos/{owner}/{repo}/pulls`
 - Topics：`GET /repos/{owner}/{repo}/topics`
+- Actions：`GET /repos/{owner}/{repo}/actions/workflows` 和 `GET /repos/{owner}/{repo}/actions/runs`
+- Checks：`GET /repos/{owner}/{repo}/commits/{ref}/check-runs` 和 check suites 相关接口
+- 仓库流量：`GET /repos/{owner}/{repo}/traffic/views`、`/traffic/clones`、`/traffic/popular/referrers`、`/traffic/popular/paths`
+- Dependency Graph SBOM：`GET /repos/{owner}/{repo}/dependency-graph/sbom`
+- Code scanning alerts：`GET /repos/{owner}/{repo}/code-scanning/alerts`
+- Dependabot alerts：`GET /repos/{owner}/{repo}/dependabot/alerts`
+- Secret scanning alerts：`GET /repos/{owner}/{repo}/secret-scanning/alerts`
+- Repository security advisories：`GET /repos/{owner}/{repo}/security-advisories`
+- Deployments：`GET /repos/{owner}/{repo}/deployments`
 
 参考链接：
 
@@ -274,8 +316,15 @@ AI 输出结构：
 - Github REST API Rate Limits: https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api
 - GitHub App 注册: https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app
 - GitHub App 权限: https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/choosing-permissions-for-a-github-app
+- GitHub App REST 权限映射: https://docs.github.com/en/rest/authentication/permissions-required-for-github-apps
 - GitHub App 安装: https://docs.github.com/en/apps/using-github-apps/installing-your-own-github-app
 - GitHub App installation access token: https://docs.github.com/en/rest/apps/apps?apiVersion=2022-11-28#create-an-installation-access-token-for-an-app
+- GitHub Actions API: https://docs.github.com/en/rest/actions
+- GitHub Traffic API: https://docs.github.com/en/rest/metrics/traffic
+- GitHub Code Scanning API: https://docs.github.com/en/rest/code-scanning/code-scanning
+- GitHub Dependabot Alerts API: https://docs.github.com/en/rest/dependabot/alerts
+- GitHub Secret Scanning API: https://docs.github.com/en/rest/secret-scanning/secret-scanning
+- GitHub Dependency Graph SBOM API: https://docs.github.com/en/rest/dependency-graph/sboms
 - OpenSSF Scorecard: https://github.com/ossf/scorecard
 - Tavily API: https://docs.tavily.com/
 
@@ -320,10 +369,10 @@ AI 输出结构：
 服务分层：
 
 - `github_app_service`：处理 GitHub App 安装回调、App JWT、installation access token 和权限错误。
-- `github_client`：封装 Github REST API 请求；公开仓库走匿名请求，私有仓库走 installation token。
+- `github_client`：封装 Github REST API 请求；公开仓库走匿名请求，私有仓库走 installation token，并根据已授权权限暴露可用能力。
 - `health_analyzer`：把 Github API 数据转换为系统评分、状态和风险提示。
 - `agent_service`：扩展功能，编排 LLM、Tavily 搜索/网页提取和 Github API 包装工具。
-- `agent_tools`：向 agent 暴露受控只读工具，限制请求范围、返回字段、页数和私有仓库数据外发策略。
+- `agent_tools`：向 agent 暴露受控只读工具，限制请求范围、返回字段、页数和私有仓库数据外发策略；根据 installation 权限动态启用基础工具或私有增强工具。
 - `config`：从 `.env` 读取 Flask、GitHub App、Tavily 和模型配置。
 
 ### 9.2 前端
@@ -385,6 +434,7 @@ MODEL_NAME=gpt-4.1-mini
 - 网络超时：允许重试。
 - GitHub App 配置缺失：公开仓库可继续匿名分析，私有仓库提示配置 `.env` 中的 GitHub App 信息。
 - GitHub App 安装失败、installation 失效或权限不足：提示重新安装或调整权限。
+- 私有增强工具权限不足：对应工具标记为 unavailable，并在 agent 报告中说明缺少的 GitHub App 权限。
 - Community Profile 不可用：不阻断整体分析，相关项标记为未知。
 - Agent 分析失败：保留系统评分结果，只提示 AI 分析失败原因。
 
@@ -414,6 +464,8 @@ MODEL_NAME=gpt-4.1-mini
 - 公开仓库无需登录即可完成系统体检。
 - 页面支持 GitHub App 安装入口、installation 状态展示和本地授权状态清理。
 - 授权范围内的私有仓库可以通过 GitHub App installation token 体检。
+- 私有仓库增强权限授予后，agent 能使用 Actions、Checks、Traffic、安全告警、SBOM、Deployments 等增强工具。
+- 私有仓库某个增强权限缺失时，页面和 agent 报告能标记该工具不可用，不影响其他工具和系统评分。
 - AI agent 分析入口与系统检测解耦；未配置模型或 Tavily 时系统检测仍可正常使用。
 - 配置模型参数后，可以单独启动基于 Github API 包装工具的 agent 分析，并得到 AI 评分、引用链接和建议。
 - 配置 Tavily 后，公开仓库 agent 分析可以额外使用网页搜索和网页提取补充外部证据。
