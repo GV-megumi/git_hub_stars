@@ -4,6 +4,7 @@ from dataclasses import asdict
 
 from flask import Blueprint, current_app, jsonify, redirect, render_template, request, session
 
+from app.agent.service import run_agent_analysis
 from app.analyzer.collector import collect_repository_snapshot
 from app.analyzer.scoring import score_repository
 from app.errors import PermissionRequiredError, ValidationError
@@ -61,12 +62,63 @@ def analyze_repository():
     )
 
 
+@bp.post("/api/agent/analyze")
+def agent_analyze():
+    settings = current_app.config["APP_SETTINGS"]
+    if not settings.agent_configured:
+        raise ValidationError("模型参数未配置，无法启动 AI 深度分析。")
+
+    payload = _json_payload()
+    repo_url = payload.get("url", "")
+    ref = parse_github_repo_url(repo_url)
+    private_mode = _private_mode(payload)
+    if private_mode:
+        _require_private_model_confirmation(payload)
+    system_score = _dict_payload_value(payload, "system_score")
+    detected_info = _dict_payload_value(payload, "detected_info")
+
+    token = _private_installation_token(ref.repo) if private_mode else None
+    github_client = GithubClient(base_url=settings.github_api_base_url, token=token)
+    permissions = session.get("github_installation_permissions", {}) if private_mode else {}
+    if not isinstance(permissions, dict):
+        permissions = {}
+
+    return jsonify(
+        run_agent_analysis(
+            repo_url=repo_url,
+            ref=ref,
+            system_score=system_score,
+            detected_info=detected_info,
+            private_mode=private_mode,
+            settings=settings,
+            github_client=github_client,
+            permissions=permissions,
+        )
+    )
+
+
 def _private_mode(payload: dict) -> bool:
     if "private_mode" not in payload:
         return False
     if not isinstance(payload["private_mode"], bool):
         raise ValidationError("private_mode must be a boolean.")
     return payload["private_mode"]
+
+
+def _dict_payload_value(payload: dict, key: str) -> dict:
+    value = payload.get(key, {})
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValidationError(f"{key} must be a JSON object.")
+    return value
+
+
+def _require_private_model_confirmation(payload: dict) -> None:
+    if payload.get("confirm_private_data_to_model") is not True:
+        raise PermissionRequiredError(
+            "Private repository AI analysis requires explicit confirmation before sending data to the model."
+        )
 
 
 def _private_installation_token(repo_name: str) -> str:
