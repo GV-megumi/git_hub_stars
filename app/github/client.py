@@ -18,7 +18,12 @@ class GithubClient:
         self.base_url = base_url.rstrip("/")
         self.token = token
 
-    def get_json(self, path: str, params: dict[str, Any] | None = None) -> Any:
+    def get_json(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        allow_redirects: bool = True,
+    ) -> Any:
         if not self._is_valid_path(path):
             raise ValidationError("GitHub API path must be an internal path starting with '/'.")
 
@@ -27,6 +32,7 @@ class GithubClient:
             params=params,
             headers=self._headers(),
             timeout=20,
+            allow_redirects=allow_redirects,
         )
         github_message = self._github_message(response)
         if self._is_rate_limit_response(response, github_message):
@@ -61,6 +67,12 @@ class GithubClient:
                 github_path=path,
                 github_message=github_message,
             )
+        if response.status_code == 202:
+            return {"status_code": 202}
+        if response.status_code == 302:
+            return {"status_code": 302}
+        if not response.content:
+            return {"status_code": response.status_code}
         return response.json()
 
     def _headers(self) -> dict[str, str]:

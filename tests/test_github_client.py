@@ -55,6 +55,47 @@ def test_get_json_uses_20_second_timeout(requests_mock):
     assert requests_mock.last_request.timeout == 20
 
 
+def test_get_json_returns_status_payload_for_202_no_content(requests_mock):
+    requests_mock.get(
+        "https://api.github.com/repos/a/repo/dependency-graph/sbom/fetch-report/1",
+        status_code=202,
+        text="",
+    )
+    client = GithubClient()
+
+    data = client.get_json(
+        "/repos/a/repo/dependency-graph/sbom/fetch-report/1",
+        allow_redirects=False,
+    )
+
+    assert data == {"status_code": 202}
+
+
+def test_get_json_returns_redirect_location_for_302(requests_mock):
+    requests_mock.get(
+        "https://api.github.com/repos/a/repo/dependency-graph/sbom/fetch-report/1",
+        status_code=302,
+        headers={"Location": "https://codeload.github.com/private-sbom"},
+    )
+    client = GithubClient()
+
+    data = client.get_json(
+        "/repos/a/repo/dependency-graph/sbom/fetch-report/1",
+        allow_redirects=False,
+    )
+
+    assert data == {"status_code": 302}
+
+
+def test_get_json_returns_status_payload_for_204_no_content(requests_mock):
+    requests_mock.get("https://api.github.com/repos/a/repo/empty", status_code=204)
+    client = GithubClient()
+
+    data = client.get_json("/repos/a/repo/empty")
+
+    assert data == {"status_code": 204}
+
+
 def test_404_raises_not_found(requests_mock):
     requests_mock.get("https://api.github.com/repos/a/missing", status_code=404, json={})
     client = GithubClient()

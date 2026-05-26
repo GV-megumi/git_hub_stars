@@ -197,7 +197,14 @@ def test_private_agent_route_uses_installation_token_and_keeps_tavily_disabled(m
     client = app.test_client()
     with client.session_transaction() as session:
         session["github_installation_id"] = "789"
-        session["github_installation_permissions"] = {"actions": "read", "metadata": "read"}
+        session["github_installation_permissions"] = {
+            "actions": "read",
+            "metadata": "read",
+            "vulnerability_alerts": "read",
+            "administration": "write",
+            "security_events": "read",
+            "secret_scanning_alerts": "none",
+        }
 
     response = client.post(
         "/api/agent/analyze",
@@ -218,11 +225,25 @@ def test_private_agent_route_uses_installation_token_and_keeps_tavily_disabled(m
         {
             "installation_id": "789",
             "repositories": ["private-repo"],
-            "permissions": {"contents": "read", "metadata": "read"},
+            "permissions": {
+                "contents": "read",
+                "metadata": "read",
+                "actions": "read",
+                "administration": "read",
+                "vulnerability_alerts": "read",
+                "security_events": "read",
+            },
         }
     ]
     assert created_clients[0].token == "installation-token"
-    assert service_calls[0]["permissions"] == {"actions": "read", "metadata": "read"}
+    assert service_calls[0]["permissions"] == {
+        "actions": "read",
+        "metadata": "read",
+        "vulnerability_alerts": "read",
+        "administration": "write",
+        "security_events": "read",
+        "secret_scanning_alerts": "none",
+    }
     assert "installation-token" not in json.dumps(payload)
     with client.session_transaction() as session:
         assert "github_installation_token" not in session

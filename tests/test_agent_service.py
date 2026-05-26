@@ -349,6 +349,118 @@ def test_run_agent_analysis_private_mode_skips_tavily_even_with_key():
     assert "不向公开网页工具发送私有数据" in llm.prompts[0]
 
 
+def test_run_agent_analysis_private_mode_collects_enhanced_github_tools():
+    github_client = FakeGithubClient(repo_name="private-repo")
+    llm = FakeLlm(
+        {
+            "ai_score": 76,
+            "confidence": "medium",
+            "summary": "private enhanced analysis",
+            "findings": [],
+            "recommendations": [],
+            "references": [],
+        }
+    )
+
+    result = run_agent_analysis(
+        repo_url="https://github.com/owner/private-repo",
+        ref=RepoRef("owner", "private-repo"),
+        system_score={"score": 70},
+        detected_info={},
+        private_mode=True,
+        settings=make_settings(tavily_api_key="tavily-key"),
+        github_client=github_client,
+        llm=llm,
+        tavily=ExplodingTavily(),
+        permissions={
+            "actions": "read",
+            "administration": "read",
+            "contents": "read",
+            "vulnerability_alerts": "read",
+            "security_events": "read",
+            "secret_scanning_alerts": "read",
+        },
+    )
+
+    assert result["tavily_enabled"] is False
+    assert result["attempted_tools"] == [
+        "github.get_repo_summary",
+        "github.get_language_breakdown",
+        "github.get_releases",
+        "github.get_actions_runs_summary",
+        "github.get_traffic_summary",
+        "github.get_sbom_summary",
+        "github.get_dependabot_alerts_summary",
+        "github.get_code_scanning_alerts_summary",
+        "github.get_secret_scanning_alerts_summary",
+    ]
+    assert "github.get_traffic_summary" in result["used_tools"]
+    assert "github.get_sbom_summary" in result["used_tools"]
+    assert "github.get_dependabot_alerts_summary" in result["used_tools"]
+    assert "github.get_code_scanning_alerts_summary" in result["used_tools"]
+    assert "github.get_secret_scanning_alerts_summary" in result["used_tools"]
+    assert "traffic" in llm.prompts[0]
+    assert "dependabot" in llm.prompts[0]
+    assert "secret_scanning" in llm.prompts[0]
+    assert github_client.calls == [
+        ("/repos/owner/private-repo", None),
+        ("/repos/owner/private-repo/languages", None),
+        ("/repos/owner/private-repo/releases", {"per_page": 10}),
+        ("/repos/owner/private-repo/actions/runs", {"per_page": 20}),
+        ("/repos/owner/private-repo/traffic/views", None),
+        ("/repos/owner/private-repo/traffic/clones", None),
+        ("/repos/owner/private-repo/traffic/popular/referrers", None),
+        ("/repos/owner/private-repo/traffic/popular/paths", None),
+        ("/repos/owner/private-repo/dependency-graph/sbom/generate-report", None),
+        ("/repos/owner/private-repo/dependabot/alerts", {"per_page": 100}),
+        ("/repos/owner/private-repo/code-scanning/alerts", {"per_page": 100}),
+        ("/repos/owner/private-repo/secret-scanning/alerts", {"per_page": 100}),
+    ]
+
+
+def test_run_agent_analysis_private_mode_attempts_unavailable_tools_without_marking_used():
+    github_client = FakeGithubClient(repo_name="private-repo")
+    llm = FakeLlm(
+        {
+            "ai_score": 60,
+            "confidence": "low",
+            "summary": "limited private analysis",
+            "findings": [],
+            "recommendations": [],
+            "references": [],
+        }
+    )
+
+    result = run_agent_analysis(
+        repo_url="https://github.com/owner/private-repo",
+        ref=RepoRef("owner", "private-repo"),
+        system_score={"score": 60},
+        detected_info={},
+        private_mode=True,
+        settings=make_settings(tavily_api_key="tavily-key"),
+        github_client=github_client,
+        llm=llm,
+        tavily=ExplodingTavily(),
+        permissions={"contents": "read"},
+    )
+
+    assert "github.get_traffic_summary" in result["attempted_tools"]
+    assert "github.get_dependabot_alerts_summary" in result["attempted_tools"]
+    assert "github.get_code_scanning_alerts_summary" in result["attempted_tools"]
+    assert "github.get_secret_scanning_alerts_summary" in result["attempted_tools"]
+    assert "github.get_traffic_summary" not in result["used_tools"]
+    assert "github.get_dependabot_alerts_summary" not in result["used_tools"]
+    assert "github.get_code_scanning_alerts_summary" not in result["used_tools"]
+    assert "github.get_secret_scanning_alerts_summary" not in result["used_tools"]
+    assert "missing_permission" in llm.prompts[0]
+    assert github_client.calls == [
+        ("/repos/owner/private-repo", None),
+        ("/repos/owner/private-repo/languages", None),
+        ("/repos/owner/private-repo/releases", {"per_page": 10}),
+        ("/repos/owner/private-repo/dependency-graph/sbom/generate-report", None),
+    ]
+
+
 def test_run_agent_analysis_records_tavily_tool_errors_without_blocking_llm():
     tavily = SearchFailingTavily()
     llm = FakeLlm(
@@ -489,6 +601,44 @@ class FakeGithubClient:
                     }
                 ],
             },
+            f"{base}/traffic/views": {"count": 10, "uniques": 4, "views": [{"count": 1}]},
+            f"{base}/traffic/clones": {"count": 6, "uniques": 3, "clones": [{"count": 1}]},
+            f"{base}/traffic/popular/referrers": [
+                {"referrer": "github.com", "count": 5, "uniques": 2, "extra": "drop"}
+            ],
+            f"{base}/traffic/popular/paths": [
+                {"path": "/owner/private-repo", "title": "repo", "count": 8, "uniques": 3, "extra": "drop"}
+            ],
+            f"{base}/dependency-graph/sbom/generate-report": {
+                "sbom": {"packages": [{"name": "flask", "versionInfo": "3.0.0"}]},
+                "sbom_url": "https://api.github.com/repos/owner/private-repo/dependency-graph/sbom/fetch-report/1",
+            },
+            f"{base}/dependabot/alerts": [
+                {
+                    "number": 1,
+                    "state": "open",
+                    "dependency": {"package": {"name": "flask", "ecosystem": "pip"}},
+                    "security_vulnerability": {"severity": "high"},
+                    "security_advisory": {"summary": "drop"},
+                }
+            ],
+            f"{base}/code-scanning/alerts": [
+                {
+                    "number": 2,
+                    "state": "dismissed",
+                    "rule": {"id": "py/sql-injection", "severity": "error"},
+                    "tool": {"name": "CodeQL"},
+                    "most_recent_instance": {"message": {"text": "drop"}},
+                }
+            ],
+            f"{base}/secret-scanning/alerts": [
+                {
+                    "number": 3,
+                    "state": "open",
+                    "secret_type": "github_personal_access_token",
+                    "secret": "drop-secret",
+                }
+            ],
         }
         return fixtures[path]
 

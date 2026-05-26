@@ -15,6 +15,13 @@ from app.github.url_parser import parse_github_repo_url
 bp = Blueprint("main", __name__)
 
 _PRIVATE_ANALYSIS_PERMISSIONS = {"contents": "read", "metadata": "read"}
+_PRIVATE_AGENT_OPTIONAL_PERMISSIONS = (
+    "actions",
+    "administration",
+    "vulnerability_alerts",
+    "security_events",
+    "secret_scanning_alerts",
+)
 
 _GITHUB_APP_SESSION_KEYS = (
     "github_installation_id",
@@ -77,11 +84,12 @@ def agent_analyze():
     system_score = _dict_payload_value(payload, "system_score")
     detected_info = _dict_payload_value(payload, "detected_info")
 
-    token = _private_installation_token(ref.repo) if private_mode else None
-    github_client = GithubClient(base_url=settings.github_api_base_url, token=token)
     permissions = session.get("github_installation_permissions", {}) if private_mode else {}
     if not isinstance(permissions, dict):
         permissions = {}
+    token_permissions = _private_agent_token_permissions(permissions) if private_mode else None
+    token = _private_installation_token(ref.repo, permissions=token_permissions) if private_mode else None
+    github_client = GithubClient(base_url=settings.github_api_base_url, token=token)
 
     return jsonify(
         run_agent_analysis(
@@ -121,7 +129,7 @@ def _require_private_model_confirmation(payload: dict) -> None:
         )
 
 
-def _private_installation_token(repo_name: str) -> str:
+def _private_installation_token(repo_name: str, permissions: dict[str, str] | None = None) -> str:
     installation_id = session.get("github_installation_id")
     if not installation_id:
         raise PermissionRequiredError("GitHub App installation is required for private repository analysis.")
@@ -139,12 +147,24 @@ def _private_installation_token(repo_name: str) -> str:
     token_response = auth.create_installation_token(
         installation_id,
         repositories=[repo_name],
-        permissions=_PRIVATE_ANALYSIS_PERMISSIONS.copy(),
+        permissions=permissions or _PRIVATE_ANALYSIS_PERMISSIONS.copy(),
     )
     token = token_response.get("token") if isinstance(token_response, dict) else None
     if not isinstance(token, str) or not token:
         raise ValidationError("GitHub App installation token response did not include a token.")
     return token
+
+
+def _private_agent_token_permissions(granted_permissions: dict[str, str]) -> dict[str, str]:
+    requested = _PRIVATE_ANALYSIS_PERMISSIONS.copy()
+    for permission in _PRIVATE_AGENT_OPTIONAL_PERMISSIONS:
+        if _permission_allows_read(granted_permissions.get(permission)):
+            requested[permission] = "read"
+    return requested
+
+
+def _permission_allows_read(value: object) -> bool:
+    return value in {"read", "write", "admin"}
 
 
 @bp.get("/github-app/install")

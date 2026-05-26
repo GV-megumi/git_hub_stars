@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 from typing import Any
+from urllib.parse import urlparse
 
 from app.errors import NotFoundError, PermissionRequiredError
 from app.github.client import GithubClient
@@ -32,6 +34,10 @@ _ACTIONS_RUN_FIELDS = (
     "updated_at",
     "html_url",
 )
+
+_MAX_SBOM_PACKAGES = 20
+_MAX_ALERT_SUMMARIES = 10
+_MAX_TRAFFIC_TOP_ITEMS = 10
 
 
 class GithubAgentTools:
@@ -133,6 +139,182 @@ class GithubAgentTools:
             "recent_runs": recent_runs,
         }
 
+    def get_traffic_summary(self) -> dict[str, Any]:
+        permission = "administration:read"
+        if not self._has("administration", "read"):
+            return self._unavailable(permission)
+
+        ok, views = self._get_json_or_unavailable(f"{self.base}/traffic/views", permission)
+        if not ok:
+            return views
+        ok, clones = self._get_json_or_unavailable(f"{self.base}/traffic/clones", permission)
+        if not ok:
+            return clones
+        ok, referrers = self._get_json_or_unavailable(f"{self.base}/traffic/popular/referrers", permission)
+        if not ok:
+            return referrers
+        ok, paths = self._get_json_or_unavailable(f"{self.base}/traffic/popular/paths", permission)
+        if not ok:
+            return paths
+
+        if (
+            not isinstance(views, dict)
+            or not isinstance(clones, dict)
+            or not isinstance(referrers, list)
+            or not isinstance(paths, list)
+        ):
+            return self._malformed_traffic()
+
+        return {
+            "available": True,
+            "views": self._traffic_totals(views),
+            "clones": self._traffic_totals(clones),
+            "referrers": self._traffic_referrers(referrers),
+            "paths": self._traffic_paths(paths),
+        }
+
+    def get_sbom_summary(self) -> dict[str, Any]:
+        permission = "contents:read"
+        if not self._has("contents", "read"):
+            return self._unavailable(permission)
+
+        ok, data = self._get_json_or_unavailable(f"{self.base}/dependency-graph/sbom/generate-report", permission)
+        if not ok:
+            return data
+
+        if not isinstance(data, dict):
+            return self._malformed_sbom()
+        summary = self._sbom_summary_from_response(data)
+        if summary is not None:
+            return summary
+
+        fetch_path = self._same_origin_sbom_fetch_path(data.get("sbom_url"))
+        if fetch_path is None:
+            if isinstance(data.get("sbom_url"), str):
+                return self._sbom_report_requested("report_requested")
+            return self._malformed_sbom()
+
+        try:
+            fetched = self.client.get_json(fetch_path, allow_redirects=False)
+        except PermissionRequiredError:
+            return self._unavailable(permission)
+        except NotFoundError:
+            return self._sbom_report_requested("processing")
+
+        if not isinstance(fetched, dict):
+            return self._sbom_report_requested("processing")
+        if fetched.get("status_code") == 202:
+            return self._sbom_report_requested("processing")
+        if fetched.get("status_code") == 302:
+            return self._sbom_report_requested("report_ready")
+        summary = self._sbom_summary_from_response(fetched)
+        if summary is None:
+            return self._sbom_report_requested("processing")
+        return summary
+
+    def _sbom_summary_from_response(self, data: dict[str, Any]) -> dict[str, Any] | None:
+        if "status_code" in data:
+            return None
+        sbom = data.get("sbom")
+        if not isinstance(sbom, dict):
+            return None
+        packages = sbom.get("packages", [])
+        if not isinstance(packages, list):
+            return None
+
+        package_summaries = [
+            summary
+            for summary in (self._sbom_package_summary(package) for package in packages[:_MAX_SBOM_PACKAGES])
+            if summary is not None
+        ]
+        return {
+            "available": True,
+            "package_count": len(packages),
+            "packages": package_summaries,
+        }
+
+    def get_dependabot_alerts_summary(self) -> dict[str, Any]:
+        permission = "vulnerability_alerts:read"
+        if not self._has("vulnerability_alerts", "read"):
+            return self._unavailable(permission)
+
+        ok, alerts = self._get_json_or_unavailable(
+            f"{self.base}/dependabot/alerts",
+            permission,
+            params={"per_page": 100},
+        )
+        if not ok:
+            return alerts
+        if not isinstance(alerts, list):
+            return self._malformed_dependabot_alerts()
+
+        alert_items = [alert for alert in alerts if isinstance(alert, dict)]
+        return {
+            "available": True,
+            "open_alerts": self._open_alert_count(alert_items),
+            "severity_counts": self._counts_by_value(alert_items, self._dependabot_severity),
+            "state_counts": self._counts(alert_items, "state"),
+            "alerts": [
+                self._dependabot_alert_summary(alert)
+                for alert in alert_items[:_MAX_ALERT_SUMMARIES]
+            ],
+        }
+
+    def get_code_scanning_alerts_summary(self) -> dict[str, Any]:
+        permission = "security_events:read"
+        if not self._has("security_events", "read"):
+            return self._unavailable(permission)
+
+        ok, alerts = self._get_json_or_unavailable(
+            f"{self.base}/code-scanning/alerts",
+            permission,
+            params={"per_page": 100},
+        )
+        if not ok:
+            return alerts
+        if not isinstance(alerts, list):
+            return self._malformed_code_scanning_alerts()
+
+        alert_items = [alert for alert in alerts if isinstance(alert, dict)]
+        return {
+            "available": True,
+            "open_alerts": self._open_alert_count(alert_items),
+            "severity_counts": self._counts_by_value(alert_items, self._code_scanning_severity),
+            "rule_counts": self._counts_by_value(alert_items, self._code_scanning_rule_id),
+            "state_counts": self._counts(alert_items, "state"),
+            "alerts": [
+                self._code_scanning_alert_summary(alert)
+                for alert in alert_items[:_MAX_ALERT_SUMMARIES]
+            ],
+        }
+
+    def get_secret_scanning_alerts_summary(self) -> dict[str, Any]:
+        permission = "secret_scanning_alerts:read"
+        if not self._has("secret_scanning_alerts", "read"):
+            return self._unavailable(permission)
+
+        ok, alerts = self._get_json_or_unavailable(
+            f"{self.base}/secret-scanning/alerts",
+            permission,
+            params={"per_page": 100},
+        )
+        if not ok:
+            return alerts
+        if not isinstance(alerts, list):
+            return self._malformed_secret_scanning_alerts()
+
+        alert_items = [alert for alert in alerts if isinstance(alert, dict)]
+        return {
+            "available": True,
+            "open_alerts": self._open_alert_count(alert_items),
+            "state_counts": self._counts(alert_items, "state"),
+            "secret_type_counts": self._counts(alert_items, "secret_type"),
+            "alerts": [
+                self._secret_scanning_alert_summary(alert)
+                for alert in alert_items[:_MAX_ALERT_SUMMARIES]
+            ],
+        }
+
     def _has(self, permission: str, level: str) -> bool:
         granted = self.permissions.get(permission)
         granted_rank = _PERMISSION_LEVELS.get(granted or "")
@@ -161,6 +343,82 @@ class GithubAgentTools:
         }
 
     @staticmethod
+    def _malformed_traffic() -> dict[str, Any]:
+        return {
+            "available": False,
+            "error": "malformed_response",
+            "views": {"count": 0, "uniques": 0},
+            "clones": {"count": 0, "uniques": 0},
+            "referrers": [],
+            "paths": [],
+        }
+
+    @staticmethod
+    def _malformed_sbom() -> dict[str, Any]:
+        return {
+            "available": False,
+            "error": "malformed_response",
+            "package_count": 0,
+            "packages": [],
+        }
+
+    @staticmethod
+    def _sbom_report_requested(status: str) -> dict[str, Any]:
+        return {
+            "available": True,
+            "status": status,
+            "package_count": 0,
+            "packages": [],
+        }
+
+    @staticmethod
+    def _malformed_dependabot_alerts() -> dict[str, Any]:
+        return {
+            "available": False,
+            "error": "malformed_response",
+            "open_alerts": 0,
+            "severity_counts": {},
+            "state_counts": {},
+            "alerts": [],
+        }
+
+    @staticmethod
+    def _malformed_code_scanning_alerts() -> dict[str, Any]:
+        return {
+            "available": False,
+            "error": "malformed_response",
+            "open_alerts": 0,
+            "severity_counts": {},
+            "rule_counts": {},
+            "state_counts": {},
+            "alerts": [],
+        }
+
+    @staticmethod
+    def _malformed_secret_scanning_alerts() -> dict[str, Any]:
+        return {
+            "available": False,
+            "error": "malformed_response",
+            "open_alerts": 0,
+            "state_counts": {},
+            "secret_type_counts": {},
+            "alerts": [],
+        }
+
+    def _get_json_or_unavailable(
+        self,
+        path: str,
+        permission: str,
+        params: dict[str, Any] | None = None,
+    ) -> tuple[bool, Any]:
+        try:
+            return True, self.client.get_json(path, params=params)
+        except PermissionRequiredError:
+            return False, self._unavailable(permission)
+        except NotFoundError:
+            return False, {"available": False, "reason": "not_found"}
+
+    @staticmethod
     def _select_fields(data: dict[str, Any], fields: tuple[str, ...]) -> dict[str, Any]:
         return {field: data.get(field) for field in fields}
 
@@ -172,3 +430,156 @@ class GithubAgentTools:
             if isinstance(value, str) and value:
                 counts[value] = counts.get(value, 0) + 1
         return counts
+
+    @staticmethod
+    def _counts_by_value(items: list[dict[str, Any]], getter: Any) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for item in items:
+            value = getter(item)
+            if isinstance(value, str) and value:
+                counts[value] = counts.get(value, 0) + 1
+        return counts
+
+    @staticmethod
+    def _open_alert_count(alerts: list[dict[str, Any]]) -> int:
+        return sum(1 for alert in alerts if alert.get("state") == "open")
+
+    @staticmethod
+    def _traffic_totals(data: dict[str, Any]) -> dict[str, int]:
+        return {
+            "count": GithubAgentTools._safe_int(data.get("count")),
+            "uniques": GithubAgentTools._safe_int(data.get("uniques")),
+        }
+
+    @staticmethod
+    def _safe_int(value: Any) -> int:
+        if isinstance(value, bool):
+            return 0
+        if isinstance(value, float) and not math.isfinite(value):
+            return 0
+        if isinstance(value, (int, float)):
+            return int(value)
+        return 0
+
+    @staticmethod
+    def _traffic_referrers(items: list[Any]) -> list[dict[str, Any]]:
+        summaries = []
+        for item in items[:_MAX_TRAFFIC_TOP_ITEMS]:
+            if not isinstance(item, dict):
+                continue
+            summaries.append(
+                {
+                    "referrer": item.get("referrer"),
+                    "count": GithubAgentTools._safe_int(item.get("count")),
+                    "uniques": GithubAgentTools._safe_int(item.get("uniques")),
+                }
+            )
+        return summaries
+
+    @staticmethod
+    def _traffic_paths(items: list[Any]) -> list[dict[str, Any]]:
+        summaries = []
+        for item in items[:_MAX_TRAFFIC_TOP_ITEMS]:
+            if not isinstance(item, dict):
+                continue
+            summaries.append(
+                {
+                    "path": item.get("path"),
+                    "title": item.get("title"),
+                    "count": GithubAgentTools._safe_int(item.get("count")),
+                    "uniques": GithubAgentTools._safe_int(item.get("uniques")),
+                }
+            )
+        return summaries
+
+    def _same_origin_sbom_fetch_path(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        parsed = urlparse(value)
+        base_url = getattr(self.client, "base_url", "https://api.github.com")
+        parsed_base = urlparse(base_url)
+        if parsed.scheme != parsed_base.scheme or parsed.netloc != parsed_base.netloc:
+            return None
+        expected_prefix = f"{self.base}/dependency-graph/sbom/fetch-report/"
+        if parsed.params or parsed.query or parsed.fragment:
+            return None
+        if not parsed.path.startswith(expected_prefix):
+            return None
+        return parsed.path
+
+    @staticmethod
+    def _sbom_package_summary(package: Any) -> dict[str, Any] | None:
+        if not isinstance(package, dict):
+            return None
+        return {
+            "name": package.get("name"),
+            "version": package.get("versionInfo") or package.get("version"),
+        }
+
+    @staticmethod
+    def _dependabot_alert_summary(alert: dict[str, Any]) -> dict[str, Any]:
+        package = GithubAgentTools._dependabot_package(alert)
+        return {
+            "number": alert.get("number"),
+            "state": alert.get("state"),
+            "severity": GithubAgentTools._dependabot_severity(alert),
+            "package": package.get("name"),
+            "ecosystem": package.get("ecosystem"),
+            "html_url": alert.get("html_url"),
+        }
+
+    @staticmethod
+    def _dependabot_severity(alert: dict[str, Any]) -> Any:
+        vulnerability = alert.get("security_vulnerability")
+        if not isinstance(vulnerability, dict):
+            return None
+        return vulnerability.get("severity")
+
+    @staticmethod
+    def _dependabot_package(alert: dict[str, Any]) -> dict[str, Any]:
+        dependency = alert.get("dependency")
+        if isinstance(dependency, dict):
+            package = dependency.get("package")
+            if isinstance(package, dict):
+                return package
+        vulnerability = alert.get("security_vulnerability")
+        if isinstance(vulnerability, dict):
+            package = vulnerability.get("package")
+            if isinstance(package, dict):
+                return package
+        return {}
+
+    @staticmethod
+    def _code_scanning_alert_summary(alert: dict[str, Any]) -> dict[str, Any]:
+        tool = alert.get("tool")
+        return {
+            "number": alert.get("number"),
+            "state": alert.get("state"),
+            "rule_id": GithubAgentTools._code_scanning_rule_id(alert),
+            "severity": GithubAgentTools._code_scanning_severity(alert),
+            "tool": tool.get("name") if isinstance(tool, dict) else None,
+            "html_url": alert.get("html_url"),
+        }
+
+    @staticmethod
+    def _code_scanning_rule_id(alert: dict[str, Any]) -> Any:
+        rule = alert.get("rule")
+        if not isinstance(rule, dict):
+            return None
+        return rule.get("id")
+
+    @staticmethod
+    def _code_scanning_severity(alert: dict[str, Any]) -> Any:
+        rule = alert.get("rule")
+        if not isinstance(rule, dict):
+            return None
+        return rule.get("security_severity_level") or rule.get("severity")
+
+    @staticmethod
+    def _secret_scanning_alert_summary(alert: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "number": alert.get("number"),
+            "state": alert.get("state"),
+            "secret_type": alert.get("secret_type"),
+            "html_url": alert.get("html_url"),
+        }

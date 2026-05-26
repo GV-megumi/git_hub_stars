@@ -19,6 +19,14 @@ _TOOL_CALLS = (
     ("github.get_actions_runs_summary", "actions", "get_actions_runs_summary"),
 )
 
+_PRIVATE_TOOL_CALLS = (
+    ("github.get_traffic_summary", "traffic", "get_traffic_summary"),
+    ("github.get_sbom_summary", "sbom", "get_sbom_summary"),
+    ("github.get_dependabot_alerts_summary", "dependabot", "get_dependabot_alerts_summary"),
+    ("github.get_code_scanning_alerts_summary", "code_scanning", "get_code_scanning_alerts_summary"),
+    ("github.get_secret_scanning_alerts_summary", "secret_scanning", "get_secret_scanning_alerts_summary"),
+)
+
 
 def should_enable_tavily(private_mode: bool, tavily_api_key: str | None) -> bool:
     return not private_mode and bool(tavily_api_key and tavily_api_key.strip())
@@ -133,17 +141,24 @@ def _collect_github_context(
 ) -> dict[str, Any]:
     tools = GithubAgentTools(github_client, ref, private_mode=private_mode, permissions=permissions)
     context: dict[str, Any] = {}
-    for tool_name, context_key, method_name in _TOOL_CALLS:
+    tool_calls = _TOOL_CALLS + (_PRIVATE_TOOL_CALLS if private_mode else ())
+    for tool_name, context_key, method_name in tool_calls:
         method = getattr(tools, method_name)
         attempted_tools.append(tool_name)
         try:
-            context[context_key] = method()
+            result = method()
+            context[context_key] = result
         except AppError as exc:
             context[context_key] = {"available": False, "error": exc.code, "message": exc.message}
             tool_errors.append({"tool": tool_name, "message": exc.message})
         else:
-            used_tools.append(tool_name)
+            if _tool_result_available(result):
+                used_tools.append(tool_name)
     return context
+
+
+def _tool_result_available(result: Any) -> bool:
+    return not (isinstance(result, dict) and result.get("available") is False)
 
 
 def _collect_tavily_context(
