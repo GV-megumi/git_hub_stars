@@ -12,6 +12,8 @@ const chartColors = [
 const state = {
   githubApp: null,
   lastAnalysis: null,
+  lastAnalysisUrl: null,
+  analysisVersion: 0,
 };
 
 const els = {};
@@ -56,7 +58,11 @@ function bindElements() {
     "recommendation-list",
     "partial-errors-list",
     "agent-note",
+    "agent-private-confirm-row",
+    "agent-private-confirm",
     "agent-button",
+    "agent-status",
+    "agent-result",
   ].forEach((id) => {
     els[id] = document.getElementById(id);
   });
@@ -64,9 +70,12 @@ function bindElements() {
 
 function bindEvents() {
   els["repo-form"].addEventListener("submit", analyzeRepository);
-  els["mode-public"].addEventListener("change", syncModeBadge);
-  els["mode-private"].addEventListener("change", syncModeBadge);
+  els["repo-url"].addEventListener("input", invalidateAnalysisForInputChange);
+  els["mode-public"].addEventListener("change", handleModeChange);
+  els["mode-private"].addEventListener("change", handleModeChange);
   els["github-app-clear"].addEventListener("click", clearGithubAppSession);
+  els["agent-button"].addEventListener("click", runAgentAnalysis);
+  els["agent-private-confirm"].addEventListener("change", renderAgentAvailability);
 
   let resizeTimer = null;
   window.addEventListener("resize", () => {
@@ -99,11 +108,13 @@ function renderInitialState() {
   renderTextList(els["recommendation-list"], [], "暂无建议数据。");
   renderTextList(els["partial-errors-list"], [], "暂无部分错误。");
   drawEmptyCharts();
-  renderAgentPlaceholder(els["mode-private"].checked);
+  renderAgentControls(false);
 }
 
 function resetAnalysisState() {
+  state.analysisVersion += 1;
   state.lastAnalysis = null;
+  state.lastAnalysisUrl = null;
   renderInitialState();
 }
 
@@ -197,6 +208,7 @@ async function analyzeRepository(event) {
     return;
   }
 
+  const requestVersion = beginAnalysisRefresh();
   setLoading(true);
   setFormMessage("分析中...", "neutral");
 
@@ -213,10 +225,17 @@ async function analyzeRepository(event) {
     if (!response.ok) {
       throw new Error(payload.message || "分析失败。");
     }
+    if (requestVersion !== state.analysisVersion) {
+      return;
+    }
     state.lastAnalysis = payload;
+    state.lastAnalysisUrl = url;
     setFormMessage("分析完成。", "success");
     renderAnalysis(payload);
   } catch (error) {
+    if (requestVersion !== state.analysisVersion) {
+      return;
+    }
     resetAnalysisState();
     setFormMessage(error.message || "分析失败。", "error");
   } finally {
@@ -247,7 +266,7 @@ function renderAnalysis(data) {
   renderActivity(activity);
   renderRisksAndRecommendations(score, partialErrors);
   renderCharts(data);
-  renderAgentPlaceholder(data.private_mode);
+  renderAgentControls(true);
 }
 
 function renderMetrics(repo) {
@@ -504,12 +523,229 @@ function syncModeBadge() {
   els["mode-badge"].className = privateMode ? "state-badge warning" : "state-badge";
 }
 
-function renderAgentPlaceholder(privateMode) {
+function handleModeChange() {
+  syncModeBadge();
+  invalidateAnalysisForInputChange();
+}
+
+function invalidateAnalysisForInputChange() {
+  state.analysisVersion += 1;
+  if (!state.lastAnalysis && !state.lastAnalysisUrl) {
+    return;
+  }
+  state.lastAnalysis = null;
+  state.lastAnalysisUrl = null;
+  renderAgentControls(false);
+  els["score-status"].textContent = "输入已变更，请重新体检";
+}
+
+function beginAnalysisRefresh() {
+  state.analysisVersion += 1;
+  state.lastAnalysis = null;
+  state.lastAnalysisUrl = null;
+  renderAgentControls(false);
+  return state.analysisVersion;
+}
+
+function renderAgentControls(hasAnalysis) {
+  const privateMode = Boolean(state.lastAnalysis && state.lastAnalysis.private_mode);
+  els["agent-note"].textContent = hasAnalysis
+    ? privateMode
+      ? "私有仓库 AI 分析需要单独确认后再发送体检摘要和受控 GitHub API 摘要。"
+      : "公开仓库 AI 分析会结合系统评分、GitHub API 摘要和可用公开网页证据。"
+    : "系统体检完成后，可单独启动 AI 深度分析。";
+  els["agent-private-confirm-row"].classList.toggle("hidden", !privateMode || !hasAnalysis);
+  els["agent-private-confirm"].checked = false;
+  els["agent-status"].textContent = "";
+  els["agent-status"].style.color = "#657076";
+  els["agent-result"].replaceChildren();
+  els["agent-button"].textContent = "启动 AI 深度分析";
+  renderAgentAvailability();
+}
+
+function renderAgentAvailability() {
+  const hasAnalysis = Boolean(state.lastAnalysis);
+  const privateMode = Boolean(state.lastAnalysis && state.lastAnalysis.private_mode);
+  const confirmed = Boolean(els["agent-private-confirm"].checked);
+  els["agent-button"].disabled = !hasAnalysis || (privateMode && !confirmed);
+}
+
+async function runAgentAnalysis() {
+  if (!state.lastAnalysis) {
+    setAgentStatus("请先完成系统体检。", "error");
+    return;
+  }
+
+  const privateMode = Boolean(state.lastAnalysis.private_mode);
+  const agentAnalysisVersion = state.analysisVersion;
+  const agentAnalysis = state.lastAnalysis;
+  const agentAnalysisUrl = state.lastAnalysisUrl;
+  if (privateMode && !els["agent-private-confirm"].checked) {
+    setAgentStatus("私有仓库需要先确认数据发送范围。", "error");
+    renderAgentAvailability();
+    return;
+  }
+
+  setAgentLoading(true);
+  setAgentStatus("AI 分析中...", "neutral");
+  els["agent-result"].replaceChildren();
+
+  try {
+    const response = await fetch("/api/agent/analyze", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(buildAgentPayload(privateMode)),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.message || "AI 分析失败。");
+    }
+    if (
+      agentAnalysisVersion !== state.analysisVersion ||
+      agentAnalysis !== state.lastAnalysis ||
+      agentAnalysisUrl !== state.lastAnalysisUrl
+    ) {
+      return;
+    }
+    setAgentStatus("AI 分析完成。", "success");
+    renderAgentResult(payload);
+  } catch (error) {
+    if (
+      agentAnalysisVersion !== state.analysisVersion ||
+      agentAnalysis !== state.lastAnalysis ||
+      agentAnalysisUrl !== state.lastAnalysisUrl
+    ) {
+      return;
+    }
+    setAgentStatus(error.message || "AI 分析失败。", "error");
+  } finally {
+    setAgentLoading(false);
+  }
+}
+
+function buildAgentPayload(privateMode) {
+  return {
+    url: state.lastAnalysisUrl || "",
+    private_mode: privateMode,
+    confirm_private_data_to_model: privateMode ? els["agent-private-confirm"].checked : undefined,
+    system_score: state.lastAnalysis.score || {},
+    detected_info: {
+      repository: state.lastAnalysis.repository || {},
+      languages: state.lastAnalysis.languages || {},
+      community: state.lastAnalysis.community || {},
+      activity: state.lastAnalysis.activity || {},
+      partial_errors: state.lastAnalysis.partial_errors || [],
+    },
+  };
+}
+
+function renderAgentResult(result) {
+  const blocks = [];
+  blocks.push(createAgentScoreBlock(result));
+  blocks.push(createAgentSection("发现", result.findings, "暂无发现。", describeAgentItem));
+  blocks.push(createAgentSection("建议", result.recommendations, "暂无建议。", describeAgentItem));
+  blocks.push(createAgentSection("引用", result.references, "暂无引用。", describeReference));
+  blocks.push(createAgentToolBlock(result));
+  els["agent-result"].replaceChildren(...blocks);
+}
+
+function createAgentScoreBlock(result) {
+  const block = document.createElement("div");
+  block.className = "agent-score-block";
+  const score = document.createElement("strong");
+  score.textContent = formatAgentScore(result.ai_score);
+  const summary = document.createElement("p");
+  summary.textContent = result.summary || "AI 未返回摘要。";
+  const meta = document.createElement("span");
+  meta.textContent = `置信度 ${result.confidence || "unknown"}`;
+  block.append(score, summary, meta);
+  return block;
+}
+
+function createAgentSection(title, items, emptyText, describe) {
+  const section = document.createElement("div");
+  section.className = "agent-section";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  const list = document.createElement("ul");
+  list.className = "stack-list compact-list";
+  renderObjectList(list, Array.isArray(items) ? items : [], emptyText, describe);
+  section.append(heading, list);
+  return section;
+}
+
+function createAgentToolBlock(result) {
+  const section = document.createElement("div");
+  section.className = "agent-section";
+  const heading = document.createElement("h3");
+  heading.textContent = "工具";
+  const facts = document.createElement("div");
+  facts.className = "fact-list compact-facts";
+  const usedTools = Array.isArray(result.used_tools) ? result.used_tools : [];
+  const attemptedTools = Array.isArray(result.attempted_tools) ? result.attempted_tools : [];
+  const toolErrors = Array.isArray(result.tool_errors) ? result.tool_errors : [];
+  facts.replaceChildren(
+    createFactItem("Tavily", result.tavily_enabled ? "已启用" : "未启用"),
+    createFactItem("已使用工具", usedTools.length ? usedTools.join(", ") : "--"),
+    createFactItem("已尝试工具", attemptedTools.length ? String(attemptedTools.length) : "--"),
+    createFactItem("工具错误", toolErrors.length ? String(toolErrors.length) : "0")
+  );
+  section.append(heading, facts);
+  if (toolErrors.length) {
+    const list = document.createElement("ul");
+    list.className = "stack-list compact-list";
+    renderObjectList(list, toolErrors, "暂无工具错误。", describeToolError);
+    section.append(list);
+  }
+  return section;
+}
+
+function describeAgentItem(item) {
+  if (item && typeof item === "object") {
+    const title = item.title || item.message || item.summary || item.code;
+    const level = item.level || item.severity || item.type;
+    return [level, title].filter(Boolean).join(": ") || JSON.stringify(item);
+  }
+  return String(item);
+}
+
+function describeReference(item) {
+  if (item && typeof item === "object") {
+    const title = item.title || item.name || item.url || "引用";
+    return item.url ? `${title} ${item.url}` : String(title);
+  }
+  return String(item);
+}
+
+function describeToolError(item) {
+  if (item && typeof item === "object") {
+    return `${item.tool || "tool"}: ${item.message || item.error || "执行失败"}`;
+  }
+  return String(item);
+}
+
+function formatAgentScore(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) {
+    return "--";
+  }
+  return String(Math.round(score));
+}
+
+function setAgentLoading(isLoading) {
   els["agent-button"].disabled = true;
-  els["agent-button"].textContent = "稍后接入";
-  els["agent-note"].textContent = privateMode
-    ? "私有仓库 Agent 分析需要额外确认数据发送范围。"
-    : "公开仓库 Agent 分析入口将在后续接入。";
+  els["agent-button"].textContent = isLoading ? "分析中..." : "启动 AI 深度分析";
+  if (!isLoading) {
+    renderAgentAvailability();
+  }
+}
+
+function setAgentStatus(message, tone) {
+  els["agent-status"].textContent = message;
+  els["agent-status"].style.color = tone === "success" ? "#2e6f58" : tone === "neutral" ? "#657076" : "#9a3d35";
 }
 
 function setLoading(isLoading) {

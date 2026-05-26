@@ -123,8 +123,14 @@
           <h2>Agent 分析</h2>
           <span class="state-badge neutral">扩展功能</span>
         </div>
-        <p id="agent-note" class="muted-text">深度分析入口已预留。私有仓库后续接入时会要求单独确认后才发送数据给模型。</p>
-        <button id="agent-button" class="quiet-button" type="button" disabled>稍后接入</button>
+        <p id="agent-note" class="muted-text">系统体检完成后，可单独启动 AI 深度分析。</p>
+        <label id="agent-private-confirm-row" class="confirm-row hidden" for="agent-private-confirm">
+          <input id="agent-private-confirm" type="checkbox">
+          <span>确认将当前私有仓库体检摘要和受控 GitHub API 摘要发送给模型分析</span>
+        </label>
+        <button id="agent-button" class="quiet-button" type="button" disabled>启动 AI 深度分析</button>
+        <p id="agent-status" class="form-message" role="status" aria-live="polite"></p>
+        <div id="agent-result" class="agent-result"></div>
       </div>
     </section>
   </main>

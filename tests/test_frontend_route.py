@@ -38,7 +38,11 @@ def test_index_route_renders_frontend_shell():
         "recommendation-list",
         "partial-errors-list",
         "agent-note",
+        "agent-private-confirm-row",
+        "agent-private-confirm",
         "agent-button",
+        "agent-status",
+        "agent-result",
         "language-chart",
         "score-chart",
     ]
@@ -49,6 +53,7 @@ def test_index_route_renders_frontend_shell():
     assert "私有模式" in html
     assert "GitHub App 授权" in html
     assert "Agent 分析" in html
+    assert "启动 AI 深度分析" in html
 
     assert html.count("<canvas") == 2
 
@@ -74,6 +79,31 @@ def test_static_javascript_contains_reset_and_clear_safety_logic():
     assert "loadGithubAppSession" in js
     assert "state.githubApp = null" in js
     assert 'els["github-app-clear"].disabled = true' in js
+
+
+def test_static_javascript_wires_agent_analysis_endpoint_and_private_confirmation():
+    js = Path("static/js/app.js").read_text(encoding="utf-8")
+
+    assert "function runAgentAnalysis" in js
+    assert 'fetch("/api/agent/analyze"' in js
+    assert "confirm_private_data_to_model" in js
+    assert "agent-private-confirm" in js
+    assert "renderAgentResult" in js
+    assert "state.lastAnalysis" in js
+    assert "state.lastAnalysisUrl" in js
+    assert 'url: state.lastAnalysisUrl || ""' in js
+    assert "state.analysisVersion" in js
+    assert "state.analysisVersion += 1" in js
+    assert "const requestVersion = beginAnalysisRefresh()" in js
+    assert "if (requestVersion !== state.analysisVersion)" in js
+    assert "function invalidateAnalysisForInputChange() {\n  state.analysisVersion += 1;" in js
+    assert "const agentAnalysisVersion = state.analysisVersion" in js
+    assert "agentAnalysisVersion !== state.analysisVersion" in js
+    assert "function invalidateAnalysisForInputChange" in js
+    assert "beginAnalysisRefresh" in js
+    assert "innerHTML" not in js
+    assert "insertAdjacentHTML" not in js
+    assert "eval(" not in js
 
 
 def test_static_javascript_renders_complete_community_checklist():
