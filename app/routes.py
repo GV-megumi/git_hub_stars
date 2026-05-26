@@ -14,7 +14,11 @@ from app.github.url_parser import parse_github_repo_url
 
 bp = Blueprint("main", __name__)
 
-_PRIVATE_ANALYSIS_PERMISSIONS = {"contents": "read", "metadata": "read"}
+_PRIVATE_ANALYSIS_PERMISSIONS = {
+    "contents": "read",
+    "metadata": "read",
+    "pull_requests": "read",
+}
 _PRIVATE_AGENT_OPTIONAL_PERMISSIONS = (
     "actions",
     "administration",

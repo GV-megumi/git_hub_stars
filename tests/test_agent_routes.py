@@ -228,6 +228,7 @@ def test_private_agent_route_uses_installation_token_and_keeps_tavily_disabled(m
             "permissions": {
                 "contents": "read",
                 "metadata": "read",
+                "pull_requests": "read",
                 "actions": "read",
                 "administration": "read",
                 "vulnerability_alerts": "read",

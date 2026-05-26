@@ -237,7 +237,11 @@ def test_analyze_private_mode_uses_installation_token_without_leaking_it(monkeyp
         {
             "installation_id": "789",
             "repositories": ["private-repo"],
-            "permissions": {"contents": "read", "metadata": "read"},
+            "permissions": {
+                "contents": "read",
+                "metadata": "read",
+                "pull_requests": "read",
+            },
         }
     ]
     assert created_clients[0].base_url == "https://api.example.test"
