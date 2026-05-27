@@ -191,29 +191,31 @@ GITHUB_APP_PRIVATE_KEY_PATH=./secrets/github-app-private-key.pem
 
 ### 3. 配置只读权限
 
-基础私有仓库体检所需权限：
+所有权限都保持 Read-only。基础私有仓库体检依赖下面 3 项权限，缺任一项时私有仓库系统体检可能无法读取完整数据：
 
-| GitHub App 权限 | 级别 | 用途 |
-| --- | --- | --- |
-| Metadata | Read-only | 读取仓库元数据。 |
-| Contents | Read-only | README、社区文件、Release、提交、语言等。 |
-| Pull requests | Read-only | Open PR 和协作积压。 |
+| GitHub App UI 权限 | API permission key | 级别 | 用途 |
+| --- | --- | --- | --- |
+| Metadata | `metadata` | Read-only | 读取仓库基础元数据。GitHub App 默认必须具备。 |
+| Contents | `contents` | Read-only | 读取 README、社区文件、Release、提交样本、语言组成等。 |
+| Pull requests | `pull_requests` | Read-only | 读取 Open PR 数量和协作积压。 |
 
-增强 Agent 可用权限：
+Agent 增强分析会按 installation 已授权权限动态启用工具，只请求 read 级别。建议按需要配置：
 
-| GitHub App 权限 | 级别 | 用途 |
-| --- | --- | --- |
-| Issues | Read-only | Issue 摘要和积压。 |
-| Actions | Read-only | GitHub Actions 最近运行和失败情况。 |
-| Checks | Read-only | Check runs 状态。 |
-| Deployments | Read-only | 部署环境和部署记录摘要。 |
-| Administration | Read-only | 流量、rulesets 等只读信息。 |
-| Repository security advisories | Read-only | 仓库安全公告摘要。 |
-| Dependabot alerts | Read-only | 依赖漏洞告警摘要。 |
-| Code scanning alerts | Read-only | 代码扫描告警摘要。 |
-| Secret scanning alerts | Read-only | Secret scanning 告警摘要。 |
+| GitHub App UI 权限 | API permission key | 级别 | 用途 |
+| --- | --- | --- | --- |
+| Issues | `issues` | Read-only | Issue 摘要、积压和近期问题信号。 |
+| Actions | `actions` | Read-only | GitHub Actions 最近运行和失败情况。 |
+| Checks | `checks` | Read-only | Check runs 状态。 |
+| Deployments | `deployments` | Read-only | 部署环境和部署记录摘要。 |
+| Administration | `administration` | Read-only | 仓库流量、rulesets 等只读信息。 |
+| Repository security advisories | `repository_advisories` | Read-only | 仓库安全公告摘要。 |
+| Dependabot alerts | `vulnerability_alerts` | Read-only | 依赖漏洞告警摘要。 |
+| Code scanning alerts | `security_events` | Read-only | 代码扫描告警摘要。 |
+| Secret scanning alerts | `secret_scanning_alerts` | Read-only | Secret scanning 告警摘要。 |
 
-只配置基础权限也可以使用系统体检。增强权限缺失时，对应 Agent 工具会显示不可用，不阻塞其他分析。
+只配置基础权限也可以使用系统体检。增强权限缺失时，对应 Agent 工具会显示不可用或记录 tool error，不阻塞其他分析。
+
+如果 GitHub App 已安装后又新增或调整权限，需要进入已安装账号/组织的 GitHub App 页面确认权限更新，再回到本工具点击“安装或更新授权”完成本地 session 刷新。
 
 ### 4. 安装 GitHub App
 
