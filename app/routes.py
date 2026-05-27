@@ -285,6 +285,7 @@ def github_app_setup():
     installation = auth.get_installation(installation_id)
 
     _clear_github_app_session()
+    session.permanent = True
     session["github_installation_id"] = installation_id
     repository_selection = installation.get("repository_selection")
     repositories = installation.get("repositories") or []

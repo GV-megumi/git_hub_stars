@@ -173,6 +173,21 @@ def test_setup_verifies_installation_resets_old_session_and_exposes_non_sensitiv
     assert client.get("/api/github-app/session").get_json()["installed"] is False
 
 
+def test_setup_uses_persistent_cookie_for_github_app_authorization(monkeypatch):
+    app = create_app(make_settings(configured=True))
+    client = app.test_client()
+    install_fake_auth(monkeypatch)
+
+    response = client.get("/github-app/setup?installation_id=789")
+
+    assert response.status_code == 302
+    set_cookie = response.headers.get("Set-Cookie", "")
+    assert "session=" in set_cookie
+    assert "Expires=" in set_cookie or "Max-Age=" in set_cookie
+    with client.session_transaction() as session:
+        assert session.permanent is True
+
+
 def test_setup_without_repository_params_clears_old_repositories(monkeypatch):
     app = create_app(make_settings(configured=True))
     client = app.test_client()
