@@ -657,9 +657,9 @@ function isAgentConfigured() {
 function renderAgentResult(result) {
   const blocks = [];
   blocks.push(createAgentScoreBlock(result));
-  blocks.push(createAgentSection("发现", result.findings, "暂无发现。", describeAgentItem));
-  blocks.push(createAgentSection("建议", result.recommendations, "暂无建议。", describeAgentItem));
-  blocks.push(createAgentSection("引用", result.references, "暂无引用。", describeReference));
+  blocks.push(createAgentSection("发现", result.findings, "暂无发现。", describeAgentItem, "agent-findings"));
+  blocks.push(createAgentSection("建议", result.recommendations, "暂无建议。", describeAgentItem, "agent-recommendations"));
+  blocks.push(createAgentSection("引用", result.references, "暂无引用。", describeReference, "agent-references"));
   blocks.push(createAgentToolBlock(result));
   els["agent-result"].replaceChildren(...blocks);
 }
@@ -677,9 +677,9 @@ function createAgentScoreBlock(result) {
   return block;
 }
 
-function createAgentSection(title, items, emptyText, describe) {
+function createAgentSection(title, items, emptyText, describe, sectionClass = "") {
   const section = document.createElement("div");
-  section.className = "agent-section";
+  section.className = ["agent-section", sectionClass].filter(Boolean).join(" ");
   const heading = document.createElement("h3");
   heading.textContent = title;
   const list = document.createElement("ul");
@@ -691,7 +691,7 @@ function createAgentSection(title, items, emptyText, describe) {
 
 function createAgentToolBlock(result) {
   const section = document.createElement("div");
-  section.className = "agent-section";
+  section.className = "agent-section agent-tools";
   const heading = document.createElement("h3");
   heading.textContent = "工具";
   const facts = document.createElement("div");
@@ -721,7 +721,28 @@ function describeAgentItem(item) {
     const message = item.message && item.message !== title ? item.message : "";
     const detail = [title, message].filter(Boolean).join(" - ") || item.message;
     const level = item.level || item.severity || item.type;
-    return [level, detail].filter(Boolean).join(": ") || JSON.stringify(item);
+    if (!detail) {
+      return JSON.stringify(item);
+    }
+    const wrapper = document.createElement("div");
+    wrapper.className = "agent-item";
+    const header = document.createElement("div");
+    header.className = "agent-item-head";
+    const badge = document.createElement("span");
+    badge.className = `agent-level ${normalizeLevelClass(level)}`;
+    badge.textContent = formatAgentLevel(level);
+    const titleEl = document.createElement("strong");
+    titleEl.className = "agent-item-title";
+    titleEl.textContent = title || "发现";
+    header.append(badge, titleEl);
+    wrapper.append(header);
+    if (message) {
+      const messageEl = document.createElement("p");
+      messageEl.className = "agent-item-message";
+      messageEl.textContent = message;
+      wrapper.append(messageEl);
+    }
+    return wrapper;
   }
   return String(item);
 }
@@ -729,9 +750,58 @@ function describeAgentItem(item) {
 function describeReference(item) {
   if (item && typeof item === "object") {
     const title = item.title || item.name || item.url || "引用";
-    return item.url ? `${title} ${item.url}` : String(title);
+    const wrapper = document.createElement("div");
+    wrapper.className = "agent-reference";
+    const url = safeHttpUrl(item.url);
+    if (url) {
+      const link = document.createElement("a");
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = title;
+      wrapper.append(link);
+    } else {
+      const titleEl = document.createElement("strong");
+      titleEl.textContent = String(title);
+      wrapper.append(titleEl);
+    }
+    if (item.evidence) {
+      const evidence = document.createElement("p");
+      evidence.className = "agent-reference-evidence";
+      evidence.textContent = item.evidence;
+      wrapper.append(evidence);
+    }
+    return wrapper;
   }
   return String(item);
+}
+
+function formatAgentLevel(level) {
+  const labels = {
+    positive: "亮点",
+    warning: "提醒",
+    risk: "风险",
+    info: "信息",
+    critical: "严重",
+  };
+  const normalized = normalizeLevelClass(level);
+  return labels[normalized] || String(level || "信息");
+}
+
+function normalizeLevelClass(level) {
+  return String(level || "info").toLowerCase().replace(/[^a-z0-9_-]/g, "") || "info";
+}
+
+function safeHttpUrl(value) {
+  if (!value) {
+    return "";
+  }
+  try {
+    const url = new URL(String(value));
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : "";
+  } catch (error) {
+    return "";
+  }
 }
 
 function describeToolError(item) {
@@ -851,7 +921,12 @@ function renderObjectList(list, items, emptyText, describe) {
   }
   list.replaceChildren(...normalized.map((item) => {
     const li = document.createElement("li");
-    li.textContent = describe(item);
+    const rendered = describe(item);
+    if (rendered && typeof rendered === "object" && typeof rendered.nodeType === "number") {
+      li.append(rendered);
+    } else {
+      li.textContent = String(rendered);
+    }
     return li;
   }));
 }

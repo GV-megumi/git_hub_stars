@@ -113,6 +113,17 @@ def test_static_javascript_agent_findings_include_title_and_message():
 
     assert "const message = item.message && item.message !== title ? item.message : \"\";" in js
     assert "[title, message].filter(Boolean).join(\" - \")" in js
+    assert 'wrapper.className = "agent-item";' in js
+    assert 'badge.className = `agent-level ${normalizeLevelClass(level)}`;' in js
+    assert 'link.rel = "noreferrer";' in js
+
+
+def test_static_css_keeps_agent_analysis_readable():
+    css = Path("static/css/styles.css").read_text(encoding="utf-8")
+
+    assert ".agent-panel {\n  grid-column: 1 / -1;" in css
+    assert ".agent-result {\n  display: grid;\n  grid-template-columns:" in css
+    assert ".agent-score-block {\n  grid-row: span 2;" in css
 
 
 def test_static_javascript_renders_complete_community_checklist():
